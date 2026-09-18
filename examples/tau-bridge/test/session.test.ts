@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import type { TypeSafeClient } from '@typesafe-ai/sdk';
 import { scriptedController, stubModel } from '@keeled/core/testing';
 import { Session, SessionConflictError } from '../src/session.ts';
 import { describe as describeTool, type ToolSpec } from '../src/tools.ts';
@@ -175,6 +176,55 @@ describe('tau bridge session', () => {
     expect(blockers).toMatchObject([
       { data: { kind: 'missing_evidence', tool: 'create_task', resolution: expect.stringContaining('the user id') } },
     ]);
+  });
+
+  test('Jev confirms a lone known argument, and the model fills only the rest', async () => {
+    const lookup: ToolSpec = {
+      name: 'get_user',
+      description: 'Look up a user.',
+      parameters: { type: 'object', properties: { user_id: { type: 'string' } }, required: ['user_id'] },
+      risk: 'read',
+    };
+    const asked: string[][] = [];
+    const argumentClient = {
+      async systemOne(request: { questions: Record<string, unknown> }) {
+        asked.push(Object.keys(request.questions));
+        const answers = Object.fromEntries(
+          Object.keys(request.questions).map(key => [
+            key,
+            key.endsWith('::value') ? { choice: 'user_1', confidence: 0.95, probabilities: {} } : { noul: 0.95 },
+          ]),
+        );
+        return { answers, usage: { input_tokens: 0, output_tokens: 0 } };
+      },
+    } as unknown as TypeSafeClient;
+    const controller = scriptedController({
+      decisions: [
+        { type: 'tool', tool: 'get_users' },
+        { type: 'tool', tool: 'get_user' },
+        { type: 'tool', tool: 'create_task' },
+        { type: 'respond', outcome: 'completed' },
+      ],
+      assess: { goalMet: true },
+    });
+    // Only create_task's title needs the model; its user_id comes from Jev.
+    const model = stubModel({ text: 'Done.', objects: [{ status: 'ready', arguments: { user_id: 'wrong', title: 'Meeting' } }] });
+    const s = new Session({ instructions: policy, tools: [...tools, lookup], controller, model, argumentClient });
+
+    const first = await s.sendUser('Make a Meeting task for me.');
+    const second = await s.sendToolResult({ id: first.type === 'tool_call' ? first.id : '', content: '[{"user_id":"user_1"}]' });
+    expect(second).toMatchObject({ type: 'tool_call', name: 'get_user', arguments: { user_id: 'user_1' } });
+    const third = await s.sendToolResult({ id: second.type === 'tool_call' ? second.id : '', content: '{"user_id":"user_1"}' });
+    expect(third).toMatchObject({ type: 'tool_call', name: 'create_task', arguments: { user_id: 'user_1', title: 'Meeting' } });
+    expect(asked.every(keys => keys.every(key => key.startsWith('user_id::')))).toBe(true);
+  });
+
+  test('reply drafts use the fast model, and a repair uses the default one', async () => {
+    const controller = scriptedController({ decisions: [{ type: 'respond', outcome: 'needs_input' }] });
+    const fast = stubModel({ text: '<｜DSML｜ invoke name="get_users">' });
+    const careful = stubModel({ text: 'Which task should I create?' });
+    const s = new Session({ instructions: policy, tools, controller, model: careful, argumentsModel: fast });
+    expect(await s.sendUser('Help me.')).toMatchObject({ type: 'message', text: 'Which task should I create?' });
   });
 
   test('rejects results for calls that are not pending', async () => {

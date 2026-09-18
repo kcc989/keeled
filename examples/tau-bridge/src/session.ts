@@ -1,4 +1,5 @@
 import { wrapLanguageModel, type LanguageModel } from 'ai';
+import type { TypeSafeClient } from '@typesafe-ai/sdk';
 import {
   createAgent,
   evidenceTool,
@@ -60,6 +61,8 @@ export interface SessionOptions {
   argumentsModel?: LanguageModel;
   /** Model used for state-changing tool arguments. Defaults to `argumentsModel`. */
   writeArgumentsModel?: LanguageModel;
+  /** Lets Jev confirm arguments that have exactly one known value, skipping the model. */
+  argumentClient?: TypeSafeClient;
   policy?: AgentPolicy;
 }
 
@@ -93,6 +96,7 @@ export class Session {
           (call, signal) => this.#requestTool(call, signal),
           options.argumentsModel === undefined ? undefined : timed(options.argumentsModel, trace),
           options.writeArgumentsModel === undefined ? undefined : timed(options.writeArgumentsModel, trace),
+          options.argumentClient,
         ),
         // Both run locally and are never sent to the remote side: one reads stored results,
         // the other states objectives that selected actions then carry.
@@ -100,7 +104,10 @@ export class Session {
         plan: planningTool(),
       },
       planningTool: 'plan',
-      respond: respondWith(options.tools),
+      respond: respondWith(
+        options.tools,
+        options.argumentsModel === undefined ? undefined : timed(options.argumentsModel, trace),
+      ),
       policy: options.policy,
     });
   }

@@ -105,13 +105,35 @@ what was seen before it, and the real Jev answers. It needs no simulator and run
 - **Request ledger** (`packages/core/src/ledger.ts`): one fast model call per user message
   records goals and slots, the values the user asked for or chose, with roles and
   derivations, such as resolving "the ATL to PHL flight" to reservation `M05KNL`. Updates take
-  about 1.4 s median over a bounded window. Its replay was still running when this was
-  written; compare `replay_ledger.json` with the values and records runs using the scripts
-  described below.
+  1.7 s median (p90 4.1 s) over a bounded window. **It did not help:** writes reached 92%
+  with Jev-then-model, against 94% for records and 96% for the model alone. Flight changes
+  stayed 100% abstentions, and payment choices got worse (43% wrong against 21%), because
+  extra slot candidates were plausible but wrong. Reference write values were among the
+  slots only 50% of the time.
 
-**Conclusion so far.** Jev is not overloaded and is not confused by roles once whole records
-are offered. What it lacks is the user's intent. The ledger supplies that; whether it lifts
-Jev-then-model above the model alone on writes is the open question.
+| Mode | All arguments: right / wrong / abstain | Writes: Jev then model |
+| --- | --- | --- |
+| Values | 50% / 14% / 36% | 87% |
+| Records | 30% / 6% / 64% | 94% |
+| Ledger | 29% / 6% / 64% | 92% |
+
+**Conclusion.** Jev does not yet beat the model at filling arguments (96% on writes). What
+did work: it is reliable on unambiguous arguments (`user_id` 78 of 78), it declines when no
+fact fits, and records remove role errors. The remaining gap is knowing which option the
+user wants, which the ledger at 50% coverage did not close.
+
+## What we kept from the argument work
+
+1. **Jev fills only what it has proven:** a required scalar argument whose kind has exactly
+   one known fact, confirmed through Jev's "none" option and "is it listed?" gate. If that
+   covers every required argument, no model is called; otherwise the model fills the rest
+   with Jev's values fixed (`provenArguments` in `examples/tau-bridge/src/tools.ts`).
+2. **Replies are drafted without reasoning;** a repair, triggered by the contract check or
+   `reviewReply`, uses the reasoning model (`respondWith`). Replies were 34–56% of agent time.
+3. **Jev sees each tool's readiness:** for every required parameter, the known values with
+   labels and whether this tool already used them this turn, or that no value is known yet
+   (`readinessNote` in `packages/jev/src/history.ts`, using `AvailableTool.required`). This
+   targets decisions that led nowhere, 76% of decisions in `harness_v3`.
 
 ## Mistakes to avoid repeating
 
@@ -124,13 +146,10 @@ Jev-then-model above the model alone on writes is the open question.
 
 ## Next steps
 
-1. Finish the ledger replay and compare it with the values and records runs, especially
-   Jev-then-model on writes (target: above the model's 96%) and abstention rate.
-2. If it holds, integrate record and slot choices into the live `decide` request, with the
-   model as fallback, and remove argument generation where Jev is reliable.
-3. Reply generation without reasoning, escalating only when `reviewReply` flags a problem.
-4. Carry plans or the ledger across turns so multi-turn work is tracked.
-5. Measure with several trials on a fixed task subset, reporting score and time together.
+1. Measure the three kept changes with several trials on a fixed task subset, reporting
+   score, time, and the share of decisions that produce nothing.
+2. Test whether record and ledger context improves Jev's *action* choices, using the replay.
+3. Carry plans or the ledger across turns so multi-turn work is tracked.
 
 ## Reproducing
 

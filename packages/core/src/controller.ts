@@ -14,6 +14,8 @@ export interface AvailableTool {
   description: string;
   risk: Risk;
   isPlanningTool: boolean;
+  /** Names of the input's required top-level parameters, so a controller can judge readiness. */
+  required: string[];
 }
 
 export interface BudgetView {

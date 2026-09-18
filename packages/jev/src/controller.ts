@@ -13,7 +13,7 @@ import {
   type ProgressAssessment,
   type UsageBucket,
 } from '@keeled/core';
-import { blockerNote, callHistory, repetitionNote, respondNotes } from './history.ts';
+import { blockerNote, callHistory, readinessNote, repetitionNote, respondNotes } from './history.ts';
 import { controllerState } from './state.ts';
 
 interface ChoiceAnswer {
@@ -64,7 +64,8 @@ export function jev(options: JevControllerOptions = {}): Controller {
         criteria[tool.name] =
           `${tool.description} (risk: ${tool.risk})` +
           guidance +
-          `${repetitionNote(tool.name, history)}${blockerNote(tool.name, context.blockers)}`;
+          `${repetitionNote(tool.name, history)}${blockerNote(tool.name, context.blockers)}` +
+          readinessNote(tool, context, history);
       }
       const notes = respondNotes(context.blockers);
       criteria[respondLabels.completed] =

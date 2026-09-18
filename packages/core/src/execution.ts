@@ -1,5 +1,5 @@
 import { createUIMessageStream, createUIMessageStreamResponse } from 'ai';
-import { jsonSchema, safeValidateTypes } from '@ai-sdk/provider-utils';
+import { asSchema, jsonSchema, safeValidateTypes } from '@ai-sdk/provider-utils';
 import type { UIMessageStreamOutcome } from 'ai';
 import { GenerationHost } from './generation.ts';
 import { createId, stableHash } from './ids.ts';
@@ -38,6 +38,15 @@ import type { AgentDefinition, RunOptions } from './agent.ts';
 type Chunk = Parameters<Writer['write']>[0];
 
 const defaultPollTimeoutMs = 60_000;
+
+async function requiredParameters(tool: RegisteredTool): Promise<string[]> {
+  try {
+    const schema = (await asSchema(tool.inputSchema).jsonSchema) as { required?: unknown };
+    return Array.isArray(schema.required) ? schema.required.filter((name): name is string => typeof name === 'string') : [];
+  } catch {
+    return [];
+  }
+}
 
 interface Denial {
   kind: BlockerKind;
@@ -835,6 +844,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
         description: tool.description,
         risk: tool.risk,
         isPlanningTool: tool.name === this.#definition.planningTool,
+        required: await requiredParameters(tool),
       });
     }
     return tools;

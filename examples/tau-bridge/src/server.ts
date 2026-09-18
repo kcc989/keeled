@@ -8,6 +8,7 @@
  *   DELETE /sessions/:id
  */
 import { jev } from '@keeled/jev';
+import { TypeSafeClient } from '@typesafe-ai/sdk';
 import { openRouterModels, providersFromEnvironment } from './models.ts';
 import { Session, SessionConflictError, type SessionOptions, type ToolResult } from './session.ts';
 
@@ -21,6 +22,7 @@ if (!modelId || !apiKey) {
 const providers = providersFromEnvironment();
 const { model, argumentsModel, writeArgumentsModel } = openRouterModels(modelId, apiKey, providers);
 const controller = jev();
+const argumentClient = new TypeSafeClient();
 const policy = { generationTimeoutMs: 60_000 };
 const sessions = new Map<string, Session>();
 const route = /^\/sessions\/([^/]+)(?:\/(user|tool))?$/;
@@ -41,7 +43,7 @@ const server = Bun.serve({
       if (action === undefined && request.method === 'PUT') {
         const body = (await request.json()) as Pick<SessionOptions, 'instructions' | 'tools' | 'history'>;
         sessions.get(id)?.close();
-        sessions.set(id, new Session({ ...body, controller, model, argumentsModel, writeArgumentsModel, policy }));
+        sessions.set(id, new Session({ ...body, controller, model, argumentsModel, writeArgumentsModel, argumentClient, policy }));
         return new Response(null, { status: 201 });
       }
       if (action === undefined && request.method === 'DELETE') {

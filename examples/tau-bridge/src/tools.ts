@@ -1,7 +1,12 @@
 import { jsonSchema, type LanguageModel } from 'ai';
+import type { TypeSafeClient } from '@typesafe-ai/sdk';
+import { chooseArguments } from '@keeled/jev';
 import {
   MissingInformation,
   agentTool,
+  candidatesFor,
+  factIndex,
+  factType,
   callHistory,
   presentResult,
   projectMessages,
@@ -46,6 +51,8 @@ export function bridgeTools(
   call: ToolCallHandler,
   argumentsModel?: LanguageModel,
   writeArgumentsModel?: LanguageModel,
+  /** When set, Jev confirms arguments with exactly one known value before any model is asked. */
+  argumentClient?: TypeSafeClient,
 ): AgentToolSet {
   const tools: AgentToolSet = {};
   for (const spec of specs) {
@@ -55,8 +62,13 @@ export function bridgeTools(
       inputSchema: schema,
       risk: spec.risk ?? 'unknown',
       repeat: spec.repeat ?? 'allow',
-      resolveInput: context =>
-        resolveInput(spec, context, spec.risk === 'read' ? argumentsModel : (writeArgumentsModel ?? argumentsModel)),
+      resolveInput: async context => {
+        const fixed = argumentClient === undefined ? {} : await provenArguments(spec, context, argumentClient);
+        const required = (spec.parameters as { required?: string[] }).required ?? [];
+        if (required.length > 0 && required.every(name => name in fixed)) return fixed;
+        const model = spec.risk === 'read' ? argumentsModel : (writeArgumentsModel ?? argumentsModel);
+        return resolveInput(spec, context, model, fixed);
+      },
       execute: (input, options) =>
         call({ id: options.toolCallId, name: spec.name, arguments: input }, options.abortSignal),
     });
@@ -126,10 +138,49 @@ function shape(node: SchemaNode | undefined, defs: Record<string, SchemaNode>, d
 
 // Unlike the runtime's default resolver, this one reads the whole conversation, because
 // identifiers the user gave in earlier turns are needed in later ones.
+/**
+ * Arguments Jev confirms from established facts, limited to where it has proven reliable:
+ * a required scalar parameter whose kind has exactly one known value, such as the user's id.
+ * Each still passes Jev's "none" option and "is it listed?" gate, so a lone fact that is not
+ * the right one is declined.
+ */
+async function provenArguments(spec: ToolSpec, context: AgentContext, client: TypeSafeClient): Promise<Record<string, string | number>> {
+  const schema = spec.parameters as { properties?: Record<string, { type?: string }>; required?: string[] };
+  const statements = context.messages
+    .filter(message => message.role === 'user' && typeof message.content === 'string')
+    .map(message => ({ text: message.content as string }));
+  const facts = factIndex(callHistory(context.conversation, context.state.observations), statements);
+  const parameters = (schema.required ?? [])
+    .filter(name => ['string', 'integer', 'number'].includes(schema.properties?.[name]?.type ?? ''))
+    .map(name => ({ name, candidates: candidatesFor(name, facts).filter(fact => fact.type === factType(name)) }))
+    .filter(parameter => parameter.candidates.length === 1)
+    .map(parameter => ({ key: parameter.name, name: parameter.name, candidates: parameter.candidates }));
+  if (parameters.length === 0) return {};
+  try {
+    const picks = await chooseArguments({
+      client,
+      state: {
+        transcript: context.messages.slice(-10).map(message => ({
+          role: message.role,
+          text: typeof message.content === 'string' ? message.content : '',
+        })),
+      },
+      tool: { name: spec.name, description: spec.description },
+      parameters,
+      signal: context.abortSignal,
+    });
+    return Object.fromEntries(picks.filter(pick => pick.value !== undefined).map(pick => [pick.key, pick.value!]));
+  } catch (error) {
+    if (context.abortSignal.aborted) throw error;
+    return {};
+  }
+}
+
 async function resolveInput(
   spec: ToolSpec,
   context: AgentContext,
   model: LanguageModel | undefined,
+  fixed: Record<string, string | number> = {},
 ): Promise<unknown> {
   const properties = (spec.parameters as { properties?: Record<string, unknown> }).properties;
   if (properties === undefined || Object.keys(properties).length === 0) return {};
@@ -164,12 +215,15 @@ async function resolveInput(
             `This action is awaiting the user's confirmation with input ${JSON.stringify(action.awaitingInput)}. ` +
               'If the user confirmed it unchanged, return exactly this input.',
           ]),
+      ...(Object.keys(fixed).length === 0
+        ? []
+        : [`These values are already established; use them exactly:\n${JSON.stringify(fixed)}`]),
       `Input JSON schema:\n${JSON.stringify(spec.parameters)}`,
     ].join('\n\n'),
   });
 
   if (object.status === 'missing') throw new MissingInformation(object.missing?.trim() || 'unspecified information');
-  return object.arguments ?? {};
+  return { ...((object.arguments as Record<string, unknown> | undefined) ?? {}), ...fixed };
 }
 
 interface Resolution {
@@ -238,10 +292,13 @@ const guidance: Record<StopReason, string> = {
  * tools itself, but it knows which ones the agent has, so it never denies a capability and
  * asks for exactly the inputs those tools need.
  */
-export function respondWith(specs: readonly ToolSpec[]): RespondAdapter {
+export function respondWith(specs: readonly ToolSpec[], draftModel?: LanguageModel): RespondAdapter {
   const catalog = specs.map(spec => `- ${spec.name}(${inputs(spec)}): ${describe(spec)}`).join('\n');
   return async context => {
+    // A first draft is writing, not reasoning; a repair, requested after a failed check,
+    // gets the default model's reasoning.
     const result = await context.generateText({
+      ...(context.feedback === undefined && draftModel !== undefined ? { model: draftModel } : {}),
       system: [
         context.instructions,
         'You write the next message to the user. You cannot call tools in this message, but the agent ' +

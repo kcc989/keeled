@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { TypeSafeClient } from '@typesafe-ai/sdk';
 import { presentResult, reduceState, type AgentMessage, type Blocker, type ControllerContext, type Observation } from '@keeled/core';
 import { jev } from '../src/controller.ts';
-import { blockerNote, callHistory, repetitionNote, respondNotes } from '../src/history.ts';
+import { blockerNote, callHistory, readinessNote, repetitionNote, respondNotes } from '../src/history.ts';
 import { controllerState } from '../src/state.ts';
 
 function call(tool: string, input: unknown, output: unknown, id: string): Observation {
@@ -16,8 +16,8 @@ function context(observations: Observation[], conversation: AgentMessage[] = [])
     conversation,
     state: reduceState([]),
     availableTools: [
-      { name: 'get_users', description: 'List users.', risk: 'read', isPlanningTool: false },
-      { name: 'update_task_status', description: 'Update a task.', risk: 'write', isPlanningTool: false },
+      { name: 'get_users', description: 'List users.', risk: 'read', isPlanningTool: false, required: [] },
+      { name: 'update_task_status', description: 'Update a task.', risk: 'write', isPlanningTool: false, required: ['task_id', 'status'] },
     ],
     plan: undefined,
     readySteps: [],
@@ -247,5 +247,23 @@ describe('authorization', () => {
       ' An action awaits the user\'s explicit confirmation: cancel({"id":"X"}). Asking the user to confirm it resolves this.',
     );
     expect(notes.completed).toBe('');
+  });
+});
+
+describe('readiness', () => {
+  const lookup = { name: 'get_reservation_details', description: 'Look up.', risk: 'read' as const, isPlanningTool: false, required: ['reservation_id'] };
+  const user = { user_id: 'u1', reservations: ['M05KNL', 'UHDAHF'] };
+
+  test('known values are listed, with those already used this turn marked', () => {
+    const history = callHistory(
+      context([call('get_user_details', { user_id: 'u1' }, user, 'c1'), call('get_reservation_details', { reservation_id: 'M05KNL' }, { reservation_id: 'M05KNL', origin: 'ATL' }, 'c2')]),
+    );
+    const note = readinessNote(lookup, context([]), history);
+    expect(note).toContain('reservation_id: M05KNL (origin=ATL; already used this turn)');
+    expect(note).toContain('UHDAHF (one of reservations returned by get_user_details)');
+  });
+
+  test('a parameter with no known value says so', () => {
+    expect(readinessNote(lookup, context([]), [])).toBe(' Known values: no known value yet for reservation_id.');
   });
 });
