@@ -37,6 +37,7 @@ export interface AgentDefinition<TOOLS extends AgentToolSet> {
 }
 
 const defaultRisks: readonly Risk[] = ['read', 'write', 'destructive', 'unknown'];
+const defaultAuthorizeRisks: readonly Risk[] = ['write', 'destructive', 'unknown'];
 
 export function compileDefinition<TOOLS extends AgentToolSet>(
   config: AgentConfig<TOOLS>,
@@ -60,6 +61,17 @@ export function compileDefinition<TOOLS extends AgentToolSet>(
   if (floor < 0 || floor > 1) {
     throw new ConfigurationError('policy.inferredConfidenceFloor must be between 0 and 1.');
   }
+  const authorization = policy.authorization ?? {};
+  const floors = {
+    permittedFloor: authorization.permittedFloor ?? floor,
+    verificationFloor: authorization.verificationFloor ?? floor,
+    confirmedFloor: authorization.confirmedFloor ?? floor,
+  };
+  for (const [name, value] of Object.entries(floors)) {
+    if (value < 0 || value > 1) {
+      throw new ConfigurationError(`policy.authorization.${name} must be between 0 and 1.`);
+    }
+  }
 
   return {
     instructions: config.instructions,
@@ -78,6 +90,7 @@ export function compileDefinition<TOOLS extends AgentToolSet>(
       toolTimeoutMs: policy.toolTimeoutMs,
       generationTimeoutMs: policy.generationTimeoutMs,
       allowedRisks: new Set(policy.allowedRisks ?? defaultRisks),
+      authorization: { risks: new Set(authorization.risks ?? defaultAuthorizeRisks), ...floors },
       inferredConfidenceFloor: floor,
     },
   };

@@ -1,10 +1,12 @@
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModel } from 'ai';
 import type {
+  Authorization,
   Controller,
   ControllerContext,
   ControllerDecision,
   NextAction,
+  PendingAction,
   ProgressAssessment,
 } from './controller.ts';
 import type { AgentMessage } from './types.ts';
@@ -26,6 +28,11 @@ export interface ScriptedControllerOptions {
   assess?: ScriptedAssessment | ((context: ControllerContext) => ScriptedAssessment);
   /** Action used once the script runs out. Defaults to responding `blocked`. */
   fallback?: NextAction;
+  /** When set, the controller authorizes pending calls with these answers. */
+  authorize?: (
+    action: PendingAction,
+    context: ControllerContext,
+  ) => { permitted: boolean; needsVerification?: boolean; confirmed: boolean };
 }
 
 /**
@@ -77,6 +84,19 @@ export function scriptedController(options: ScriptedControllerOptions): Controll
         usage: { calls: 1, inputTokens: 0, outputTokens: 0 },
       };
     },
+    ...(options.authorize === undefined
+      ? {}
+      : {
+          async authorize(context: ControllerContext, action: PendingAction): Promise<Authorization> {
+            const answer = options.authorize!(action, context);
+            return {
+              permitted: { value: answer.permitted, confidence: 1 },
+              needsVerification: { value: answer.needsVerification ?? false, confidence: 1 },
+              confirmed: { value: answer.confirmed, confidence: 1 },
+              usage: { calls: 1, inputTokens: 0, outputTokens: 0 },
+            };
+          },
+        }),
   };
 }
 

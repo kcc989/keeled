@@ -185,6 +185,7 @@ function applyToolPart(state: ExecutionState, part: ToolPartLike, context: Reduc
       tool: toolName,
       stepId,
       summary: `${toolName} returned a result.`,
+      input: part.input,
       detail: part.output,
     });
     return;
@@ -199,6 +200,7 @@ function applyToolPart(state: ExecutionState, part: ToolPartLike, context: Reduc
       tool: toolName,
       stepId,
       summary: part.errorText ?? `${toolName} failed.`,
+      input: part.input,
       detail: part.input,
     };
     state.observations.push(observation);

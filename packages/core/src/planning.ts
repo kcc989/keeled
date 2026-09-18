@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { agentTool, type AgentTool } from './tool.ts';
+import { agentTool, type AgentContext, type AgentTool } from './tool.ts';
 import { planProposalSchema, type PlanProposal } from './plan.ts';
-import { digestObservations, digestPlan } from './projection.ts';
+import { callHistory, digestObservations, digestPlan, presentResult } from './projection.ts';
 import type { LanguageModel } from 'ai';
 
 const planningInputSchema = z.object({
@@ -51,10 +51,14 @@ export function planningTool(options: PlanningToolOptions = {}): AgentTool<
         name: 'plan',
         system: options.instructions ?? defaultInstructions,
         prompt: [
-          `Original request:\n${context.request}`,
+          `Latest request:\n${context.request}`,
+          `Conversation:\n${transcript(context)}`,
           `Agent instructions:\n${context.instructions}`,
           `Current plan:\n${digestPlan(context.plan, context.state.stepStatuses)}`,
-          `Evidence:\n${digestObservations(context.state.observations)}`,
+          `Tool calls so far:\n${calls(context)}`,
+          `Other evidence this turn:\n${digestObservations(
+            context.state.observations.filter(o => o.kind !== 'tool-result' && o.kind !== 'tool-error'),
+          )}`,
           `Reason for planning:\n${input.reason}`,
           'Return the replacement plan.',
         ].join('\n\n'),
@@ -63,4 +67,24 @@ export function planningTool(options: PlanningToolOptions = {}): AgentTool<
       return result.object;
     },
   });
+}
+
+// A plan serves the whole conversation: the request may have been made turns before the
+// latest message, and the evidence gathered for it may come from earlier turns.
+function transcript(context: AgentContext): string {
+  return context.messages
+    .map(message => `${message.role}: ${typeof message.content === 'string' ? message.content : ''}`)
+    .join('\n');
+}
+
+function calls(context: AgentContext): string {
+  const history = callHistory(context.conversation, context.state.observations);
+  if (history.length === 0) return 'None.';
+  return history
+    .map(
+      call =>
+        `- [${call.ref}] ${call.tool}(${JSON.stringify(call.input)}) ` +
+        (call.outcome === 'result' ? `returned ${JSON.stringify(presentResult(call.result, call.ref))}` : `failed: ${String(call.result)}`),
+    )
+    .join('\n');
 }

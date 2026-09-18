@@ -55,13 +55,12 @@ const walkThrough = [
 
 describe('non-monotonic assessment', () => {
   test('a confidence dip does not un-complete a verified step', async () => {
-    let cycle = 0;
     const agent = createAgent({
       instructions: 'Do the work.',
       controller: scriptedController({
         decisions: [...walkThrough],
-        assess: () => {
-          cycle += 1;
+        assess: context => {
+          const cycle = context.state.cycle + 1;
           // Step a verifies, then its confidence collapses below the floor.
           return {
             steps: {
@@ -87,21 +86,27 @@ describe('non-monotonic assessment', () => {
   });
 
   test('a goal that passed is not withdrawn by a later uncertain pass', async () => {
-    let cycle = 0;
+    const oneStep: PlanProposal = {
+      objective: 'One step',
+      steps: [{ id: 'a', objective: 'Do A', dependencies: [] }],
+    };
+    let assessed = 0;
     const agent = createAgent({
       instructions: 'Do the work.',
       controller: scriptedController({
         decisions: [
-          { type: 'tool', tool: 'work' },
+          { type: 'tool', tool: 'plan' },
+          { type: 'tool', tool: 'work', stepId: 'a' },
           { type: 'respond', outcome: 'completed' },
         ],
         assess: () => {
-          cycle += 1;
-          return { goalMet: true, goalConfidence: cycle >= 2 ? 0.2 : 1 };
+          assessed += 1;
+          return { steps: { a: { complete: true } }, goalMet: true, goalConfidence: assessed >= 2 ? 0.2 : 1 };
         },
       }),
       model,
-      tools: { work },
+      tools: { plan: planner(oneStep), work },
+      planningTool: 'plan',
       policy: { maxSteps: 8 },
     });
 

@@ -28,7 +28,24 @@ export interface AgentPolicy {
   toolTimeoutMs?: number;
   generationTimeoutMs?: number;
   allowedRisks?: readonly Risk[];
+  authorization?: AuthorizationPolicy;
   inferredConfidenceFloor?: number;
+}
+
+/**
+ * Which calls the controller must authorize before they run, and how confident each of its
+ * judgements must be. A permission judgement below its floor, or any doubt that verification
+ * is unnecessary, escalates to a model check; a confirmation below its floor counts as absent.
+ */
+export interface AuthorizationPolicy {
+  /** Defaults to `write`, `destructive`, and `unknown`. */
+  risks?: readonly Risk[];
+  /** Defaults to `inferredConfidenceFloor`. */
+  permittedFloor?: number;
+  /** Defaults to `inferredConfidenceFloor`. */
+  verificationFloor?: number;
+  /** Defaults to `inferredConfidenceFloor`. */
+  confirmedFloor?: number;
 }
 
 export interface ResolvedPolicy {
@@ -39,6 +56,12 @@ export interface ResolvedPolicy {
   toolTimeoutMs: number | undefined;
   generationTimeoutMs: number | undefined;
   allowedRisks: ReadonlySet<Risk>;
+  authorization: {
+    risks: ReadonlySet<Risk>;
+    permittedFloor: number;
+    verificationFloor: number;
+    confirmedFloor: number;
+  };
   inferredConfidenceFloor: number;
 }
 
@@ -61,15 +84,37 @@ export interface Observation {
   tool?: string;
   stepId?: string;
   summary: string;
+  /** For tool observations, the validated input the call was made with. */
+  input?: unknown;
   detail?: unknown;
 }
+
+/**
+ * Why an attempt could not proceed. Each kind implies its recovery: a confirmation is
+ * obtained by asking the user, missing evidence by a lookup or a question, an invalid input
+ * by a different one; a policy denial or unavailable tool is explained rather than retried.
+ */
+export type BlockerKind =
+  | 'needs_confirmation'
+  | 'missing_evidence'
+  | 'policy_denied'
+  | 'invalid_input'
+  | 'duplicate'
+  | 'unavailable'
+  | 'completion_refused'
+  | 'no_progress';
 
 export interface Blocker {
   id: string;
   cycle: number;
+  kind: BlockerKind;
   tool?: string;
   stepId?: string;
+  /** The input of the attempt that was blocked, when there was one. */
+  input?: unknown;
   reason: string;
+  /** What would resolve it. */
+  resolution: string;
 }
 
 export interface StepVerification {
@@ -157,7 +202,16 @@ export interface BlockerRecord extends Blocker {}
 export interface TransitionRecord {
   id: string;
   cycle: number;
-  kind: 'cycle-start' | 'limit' | 'cancelled' | 'error' | 'finish' | 'policy-block' | 'blocked-completion';
+  kind:
+    | 'cycle-start'
+    | 'limit'
+    | 'cancelled'
+    | 'error'
+    | 'finish'
+    | 'policy-block'
+    | 'blocked-completion'
+    | 'authorized'
+    | 'response-repair';
   detail?: string;
   stopReason?: StopReason;
 }

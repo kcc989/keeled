@@ -78,6 +78,7 @@ const editFile = agentTool({
 | `available(context)` | Excludes the tool from selection when false. |
 | `resolveInput(context)` | Produces the typed input. Without it, the runtime generates input from the schema. |
 | `risk` | `read`, `write`, `destructive`, or, when unspecified, `unknown`. |
+| `repeat` | `allow` (default) runs every call. `reuse` declares that a result stays valid until a state-changing call succeeds, so an identical repeat before then is declined. `poll` exempts repetition from progress checks for `pollTimeoutMs` (default 60 seconds). Never use `reuse` for polling or data that changes outside the agent. |
 | `model` | Overrides generation inside the tool. |
 
 Agent callbacks receive managed generation directly: `context.generateText(...)` and
@@ -92,22 +93,87 @@ agent context.
 
 ## Loop
 
-Each cycle assesses progress, asks the controller for one action, and either runs one tool
-or ends the turn.
+Each cycle asks the controller for one action, and either runs one tool or ends the turn.
+When a plan exists, the cycle first assesses progress, and completion is refused until the
+goal and every step verify. Without a plan, progress is not assessed each cycle; the goal
+is assessed when the controller proposes completion, and completion is refused unless it
+verifies.
 
 1. Check availability and step dependencies.
 2. Resolve and validate input.
-3. Prepare an immutable invocation with a stable call id.
-4. Apply application policy and persist the call.
-5. Execute once, and record the result or the tool error.
-6. For the planning tool, validate the proposal and persist the next revision.
+3. For a `reuse` tool, decline an identical repeat whose result still applies.
+4. Authorize the call when its risk requires it.
+5. Prepare an immutable invocation with a stable call id.
+6. Apply application policy and persist the call.
+7. Execute once, and record the result or the tool error.
+8. For the planning tool, validate the proposal and persist the next revision.
 
-Input failures and tool failures become observations. They do not end the turn. Every cycle
-counts toward `maxSteps`, including blocked attempts. Repeating an action without new
-evidence ends the turn as `blocked`.
+Input failures, tool failures, and declined calls become observations. They do not end the
+turn. Every cycle counts toward `maxSteps`, including blocked attempts.
+
+Progress is measured in distinct evidence: a repeated identical result and a blocked
+attempt add none. Repeating one action, or alternating between two, without new evidence
+is first reported to the controller as `no_progress`; doing it again in the same turn ends
+the turn as `blocked`. A `poll` tool is exempt until its time limit passes.
+
+### Blockers
+
+Every declined attempt is recorded with a kind and what would resolve it:
+
+| Kind | Resolution |
+| --- | --- |
+| `needs_confirmation` | Ask the user. The tool is withdrawn for the rest of the turn; other tools stay available. |
+| `missing_evidence` | Obtain the named evidence by a lookup or from the user. |
+| `policy_denied` | Do not retry; explain, or choose a permitted action. |
+| `invalid_input` | Obtain valid input. |
+| `duplicate` | Use the result already in the call history. |
+| `unavailable` | Choose an available tool. |
+| `completion_refused` | Obtain what the request still needs, or respond that it cannot be done. |
+| `no_progress` | Change course, or respond with what is known. |
+
+### Selection and input
+
+A tool action may carry an `objective` and `evidence` references, which reach input
+resolution as `context.action`. An action held for confirmation is found again in later
+turns, offered to resolution as `context.action.awaitingInput`, and authorized again before
+it runs. A resolver that cannot produce input throws `MissingInformation` with what is
+needed rather than inventing values.
+
+### Evidence
+
+Every tool result keeps its call id as a stable reference. Prompts show a result whole when
+it fits; a larger list appears as a page of complete records with the number omitted and
+how to retrieve the rest. Records are never reduced to field names. `evidenceTool()` reads
+a stored result by reference, a page at a time, and can sort the full list by a field path,
+summing across `[]` segments, so questions such as "cheapest" are answered over every
+candidate.
 
 Every finished turn produces a response, including blocked, failed, and incomplete turns.
 Cancellation stops work at once, records the cancellation, and keeps partial text.
+
+### Authorization
+
+Calls whose risk is in `policy.authorization.risks` (by default `write`, `destructive`, and
+`unknown`) are judged by the controller after their input resolves and before they run: is
+the call permitted, would deciding that need calculation or detailed comparison, and has
+any confirmation the instructions require been given. Unless the controller is confident
+the call is permitted and confident no calculation is needed, the model checks the
+instructions and evidence, and its verdict decides. A confirmation judged with less than
+`confirmedFloor` confidence counts as absent. A refused call becomes a blocker, and an
+identical retry in the same turn is refused again without another check unless the
+results relevant to it have changed. A refusal records the instructions it applied, the
+results it cited, and the state-changing calls so far; it is reconsidered when any of those
+change, when any new evidence arrives for a refusal over missing evidence, and after a
+minute when the verdict depends on time. A controller without `authorize` authorizes
+nothing, and calls run as before.
+
+### Replies
+
+A reply must be plain text. Tool-call markup from a model's chat template is a broken
+contract: the reply is regenerated once with the problem as feedback, and replaced by a
+status response if it is still broken. A controller with `reviewReply` also checks that the
+reply addresses the request and claims only supported outcomes; a reply that falls short
+is regenerated once.
 
 ## Plans
 
@@ -160,10 +226,18 @@ policy: {
   repeatLimit: 3,
   maxPlanRevisions: 5,
   allowedRisks: ['read', 'write'],
+  authorization: {
+    risks: ['write', 'destructive', 'unknown'],
+    permittedFloor: 0.6,
+    verificationFloor: 0.6,
+    confirmedFloor: 0.6,
+  },
   inferredConfidenceFloor: 0.6,
   generationTimeoutMs: 30_000,
 }
 ```
+
+The authorization floors default to `inferredConfidenceFloor`.
 
 `allowedRisks` applies to both tool forms and controls unknown-risk tools. An unspecified
 risk is unknown, not read-only.

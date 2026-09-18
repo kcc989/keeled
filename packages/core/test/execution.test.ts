@@ -139,6 +139,7 @@ describe('termination paths', () => {
   test('a blocked completion does not end the turn', async () => {
     const controller = scriptedController({
       decisions: [
+        { type: 'tool', tool: 'plan' },
         { type: 'respond', outcome: 'completed' },
         { type: 'respond', outcome: 'needs_input' },
       ],
@@ -149,12 +150,113 @@ describe('termination paths', () => {
       instructions: 'Answer the question.',
       controller,
       model,
-      tools: { search: searchTool() },
+      tools: { plan: scriptedPlanner([firstPlan]), search: searchTool() },
+      planningTool: 'plan',
     });
 
     const result = await agent.run({ messages: [userMessage('Do the thing.')] });
     expect(result.stopReason).toBe('needs_input');
     expect(result.state.blockers.at(0)?.reason).toContain('Completion was requested');
+  });
+
+  test('without a plan, the goal is checked only when completion is proposed', async () => {
+    let assessed = 0;
+    const controller = scriptedController({
+      decisions: [
+        { type: 'tool', tool: 'search' },
+        { type: 'tool', tool: 'search' },
+        { type: 'respond', outcome: 'completed' },
+      ],
+      assess: () => {
+        assessed += 1;
+        return { goalMet: true };
+      },
+    });
+
+    const agent = createAgent({ instructions: 'Answer the question.', controller, model, tools: { search: searchTool() } });
+    const result = await agent.run({ messages: [userMessage('Do the thing.')] });
+    expect(assessed).toBe(1);
+    expect(result.stopReason).toBe('completed');
+    expect(result.state.goal?.outcome).toBe('passed');
+  });
+
+  test('without a plan, an unmet goal refuses completion', async () => {
+    const controller = scriptedController({
+      decisions: [
+        { type: 'respond', outcome: 'completed' },
+        { type: 'respond', outcome: 'needs_input' },
+      ],
+      assess: { goalMet: false },
+    });
+
+    const agent = createAgent({ instructions: 'Answer the question.', controller, model, tools: { search: searchTool() } });
+    const result = await agent.run({ messages: [userMessage('Do the thing.')] });
+    expect(result.stopReason).toBe('needs_input');
+    expect(result.state.blockers.at(0)?.reason).toContain('Completion was requested but the goal is failed');
+  });
+
+  test('repeated completion proposals without new evidence end the turn', async () => {
+    const controller = scriptedController({
+      decisions: Array.from({ length: 10 }, () => ({ type: 'respond', outcome: 'completed' }) as const),
+      assess: { goalMet: false },
+    });
+
+    const agent = createAgent({ instructions: 'Answer the question.', controller, model, tools: { search: searchTool() } });
+    const result = await agent.run({ messages: [userMessage('Do the thing.')] });
+    // The third refused proposal is reported as no progress; repeating after that ends the turn.
+    expect(result.stopReason).toBe('blocked');
+    expect(result.state.stepsUsed).toBe(6);
+    expect(result.state.blockers.filter(blocker => blocker.kind === 'no_progress')).toHaveLength(2);
+  });
+
+  test('alternating between two actions without new evidence is reported, then ends the turn', async () => {
+    const lookup = agentTool({
+      description: 'Look something up.',
+      inputSchema: z.object({}),
+      risk: 'read',
+      resolveInput: () => ({}),
+      execute: () => ({ same: true }),
+    });
+    const other = agentTool({
+      description: 'Look something else up.',
+      inputSchema: z.object({}),
+      risk: 'read',
+      resolveInput: () => ({}),
+      execute: () => ({ same: true }),
+    });
+    const controller = scriptedController({
+      decisions: Array.from({ length: 20 }, (_, index) => ({ type: 'tool', tool: index % 2 === 0 ? 'lookup' : 'other' }) as const),
+    });
+    const agent = createAgent({ instructions: 'Find it.', controller, model, tools: { lookup, other } });
+    const result = await agent.run({ messages: [userMessage('Find it.')] });
+    expect(result.stopReason).toBe('blocked');
+    const reports = result.state.blockers.filter(blocker => blocker.kind === 'no_progress');
+    expect(reports[0]?.reason).toContain('alternated');
+    expect(reports).toHaveLength(2);
+  });
+
+  test('a polling tool may repeat within its time limit', async () => {
+    let polls = 0;
+    const status = agentTool({
+      description: 'Check job status.',
+      inputSchema: z.object({}),
+      risk: 'read',
+      repeat: 'poll',
+      pollTimeoutMs: 60_000,
+      resolveInput: () => ({}),
+      execute: () => {
+        polls += 1;
+        return { state: 'running' };
+      },
+    });
+    const controller = scriptedController({
+      decisions: [...Array.from({ length: 8 }, () => ({ type: 'tool', tool: 'status' }) as const), { type: 'respond', outcome: 'needs_input' }],
+    });
+    const agent = createAgent({ instructions: 'Wait for the job.', controller, model, tools: { status } });
+    const result = await agent.run({ messages: [userMessage('Is it done?')] });
+    expect(polls).toBe(8);
+    expect(result.state.blockers).toHaveLength(0);
+    expect(result.stopReason).toBe('needs_input');
   });
 
   test('the step limit produces a useful response', async () => {
@@ -204,6 +306,39 @@ describe('termination paths', () => {
     const result = await agent.run({ messages: [userMessage('Try it.')] });
     expect(result.stopReason).toBe('blocked');
     expect(result.steps).toBeLessThan(20);
+  });
+
+  test('different resolved inputs are different attempts even when none can run', async () => {
+    let index = 0;
+    const lookup = agentTool({
+      description: 'Look up one record.',
+      inputSchema: z.object({ id: z.string().min(100) }),
+      risk: 'read',
+      resolveInput: () => ({ id: `record-${++index}` }),
+      execute: () => ({ ok: true }),
+    });
+    const controller = scriptedController({
+      decisions: [
+        { type: 'tool', tool: 'lookup' },
+        { type: 'tool', tool: 'lookup' },
+        { type: 'tool', tool: 'lookup' },
+        { type: 'tool', tool: 'lookup' },
+        { type: 'respond', outcome: 'blocked' },
+      ],
+    });
+    const agent = createAgent({
+      instructions: 'Inspect each known record.',
+      controller,
+      model,
+      tools: { lookup },
+      policy: { repeatLimit: 2 },
+    });
+
+    const result = await agent.run({ messages: [userMessage('Inspect four records.')] });
+
+    expect(result.stopReason).toBe('blocked');
+    expect(index).toBe(4);
+    expect(result.state.blockers.filter(blocker => blocker.kind === 'no_progress')).toHaveLength(0);
   });
 
   test('cancellation stops work and preserves partial text', async () => {
