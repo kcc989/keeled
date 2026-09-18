@@ -3,10 +3,10 @@ export type { JevControllerOptions } from './controller.ts';
 export { controllerState } from './state.ts';
 
 export {
-  applyDecisions,
   batchCalls,
   compactMessages,
   decideCall,
+  editFromDecisions,
   jevCompactor,
   questionsFor,
   reductionRatio,

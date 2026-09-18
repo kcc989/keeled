@@ -166,10 +166,32 @@ export interface TransitionRecord {
     | 'error'
     | 'finish'
     | 'policy-block'
-    | 'blocked-completion'
-    | 'compaction';
+    | 'blocked-completion';
   detail?: string;
   stopReason?: StopReason;
+}
+
+/** How one tool part appears in the compacted view. */
+export type ToolPartEdit = { remove: true } | { output: unknown } | { errorText: string };
+
+/** A compaction, as data. It changes the view of the history, never the stored messages. */
+export interface CompactionEdit {
+  /** Replaces every message before `firstKeptMessageId` with one assistant message. */
+  summary?: { text: string; firstKeptMessageId: string };
+  /** Rewrites or removes tool parts, keyed by tool call id. */
+  tools?: Record<string, ToolPartEdit>;
+}
+
+export interface CompactionRecord {
+  id: string;
+  cycle: number;
+  /** Only `applied` records change the view. */
+  outcome: 'applied' | 'unchanged' | 'failed';
+  detail: string;
+  /** Serialised size of the view before and after, in characters. */
+  charsBefore: number;
+  charsAfter?: number;
+  edit?: CompactionEdit;
 }
 
 export type AgentDataParts = {
@@ -178,6 +200,7 @@ export type AgentDataParts = {
   verification: VerificationRecord;
   blocker: BlockerRecord;
   transition: TransitionRecord;
+  compaction: CompactionRecord;
 };
 
 export type AgentMessage<TOOLS extends UIToolProjection = UIToolProjection> = UIMessage<

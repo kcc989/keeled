@@ -1,7 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import { z } from 'zod';
 import type { Questions } from '@typesafe-ai/sdk';
-import { agentTool, createAgent, reduceState, type AgentMessage, type NextAction } from '@keeled/core';
+import {
+  agentTool,
+  compactedView,
+  createAgent,
+  reduceState,
+  type AgentMessage,
+  type CompactionRecord,
+  type NextAction,
+} from '@keeled/core';
 import { scriptedController, stubModel, userMessage } from '@keeled/core/testing';
 import {
   compactMessages,
@@ -229,17 +237,22 @@ describe('jevCompactor', () => {
 
     expect(requests).toHaveLength(1);
     expect(result.stopReason).toBe('completed');
-    expect(result.messages).toHaveLength(messages.length + 1);
-    expect(toolParts(result.messages[1]).map(part => part.type)).toEqual(['tool-search', 'tool-readFile']);
     expect(result.usage.controller.inputTokens).toBe(100);
 
-    const transition = (result.messages.at(-1)?.parts ?? [])
-      .map(part => (part as { data?: { kind?: string; detail?: string } }).data)
-      .find(data => data?.kind === 'compaction');
-    expect(transition?.detail).toContain('Jev kept 1, truncated 1, and removed 1 tool calls.');
+    // Stored history is untouched; the view applies Jev's decisions.
+    expect(result.messages.slice(0, messages.length)).toEqual(messages);
+    const view = compactedView(result.messages);
+    expect(toolParts(view[1]).map(part => part.type)).toEqual(['tool-search', 'tool-readFile']);
+    expect(toolParts(view[1])[1]?.output as string).toContain('[Compacted:');
+
+    const record = (result.messages.at(-1)?.parts ?? [])
+      .filter(part => part.type === 'data-compaction')
+      .map(part => (part as { data: CompactionRecord }).data)[0];
+    expect(record?.outcome).toBe('applied');
+    expect(record?.detail).toBe('Jev kept 1, truncated 1, and removed 1 tool calls.');
   });
 
-  test('keeps the history unchanged when the reduction is too small', async () => {
+  test('proposes no edit when the reduction is too small', async () => {
     const messages = await conversation();
     const compactor = jevCompactor({ asker: fakeJev(scores).asker, minReduction: 0.99 });
     const outcome = await compactor(messages, {
@@ -247,7 +260,7 @@ describe('jevCompactor', () => {
       generateText: async () => ({ text: '', finishReason: 'stop' }),
     });
 
-    outcome.messages.forEach((message, index) => expect(message).toBe(messages[index]!));
+    expect(outcome.edit).toBeUndefined();
     expect(outcome.detail).toContain('under the minimum');
   });
 });

@@ -1,7 +1,7 @@
 import { createUIMessageStream, createUIMessageStreamResponse } from 'ai';
 import { safeValidateTypes } from '@ai-sdk/provider-utils';
 import type { UIMessageStreamOutcome } from 'ai';
-import { compactHistory, type CompactedHistory } from './compaction.ts';
+import { prepareHistory, type PreparedHistory } from './compaction.ts';
 import { GenerationHost } from './generation.ts';
 import { createId } from './ids.ts';
 import { PlanValidationError, errorMessage, isAbortError } from './errors.ts';
@@ -49,8 +49,8 @@ export class AgentExecution<TOOLS extends AgentToolSet> {
     };
     let run: ExecutionRun<TOOLS> | undefined;
 
-    // The history is only known once compaction has run, so the stream is given no original
-    // messages and the result is assembled from the history the run used.
+    // The turn runs on the compacted view, which is only known once compaction has run, so
+    // the stream is given no original messages. The result keeps the full stored history.
     this.#stream = createUIMessageStream<AgentMessage>({
       onError: error => errorMessage(error),
       execute: async ({ writer }) => {
@@ -61,11 +61,11 @@ export class AgentExecution<TOOLS extends AgentToolSet> {
           abortSignal,
           timeoutMs: definition.policy.generationTimeoutMs,
         });
-        const history = await compactHistory(definition.compaction, originalMessages, {
+        const prepared = await prepareHistory(definition.compaction, originalMessages, {
           abortSignal,
           generateText: generation.generateText,
         });
-        run = new ExecutionRun(definition, options, writer, history, usage);
+        run = new ExecutionRun(definition, options, writer, prepared, usage);
         await run.execute();
       },
       onEnd: ({ responseMessage, outcome }) => {
@@ -73,7 +73,7 @@ export class AgentExecution<TOOLS extends AgentToolSet> {
           fail(new Error('Execution did not start.'));
           return;
         }
-        settle(run.result([...run.history, responseMessage], outcome));
+        settle(run.result([...originalMessages, responseMessage], outcome));
       },
     });
   }
@@ -137,18 +137,19 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
   readonly #usage: UsageTotals;
   readonly #request: string;
   readonly #originalMessages: AgentMessage[];
-  readonly #compaction: CompactedHistory;
+  readonly #prepared: PreparedHistory;
   #stopReason: StopReason = 'limit';
 
   constructor(
     definition: AgentDefinition<TOOLS>,
     options: RunOptions,
     writer: Writer,
-    compaction: CompactedHistory,
+    prepared: PreparedHistory,
     usage: UsageTotals,
   ) {
-    const originalMessages = compaction.messages;
-    this.#compaction = compaction;
+    // Everything in the turn reads the compacted view; the stored history is left alone.
+    const originalMessages = prepared.view;
+    this.#prepared = prepared;
     this.#definition = definition;
     this.#policy = definition.policy;
     this.#usage = usage;
@@ -178,18 +179,11 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     });
   }
 
-  /** The history this turn ran on, after any compaction. */
-  get history(): AgentMessage[] {
-    return this.#originalMessages;
-  }
-
   async execute(): Promise<void> {
     this.#turn.start();
-    const compaction = this.#compaction;
-    if (compaction.transition !== undefined) {
-      this.#turn.recordTransition('compaction', compaction.transition.detail);
-    }
-    if (compaction.usage !== undefined) this.#turn.accountController(compaction.usage);
+    const { record, usage } = this.#prepared;
+    if (record !== undefined) this.#turn.recordCompaction(record);
+    if (usage !== undefined) this.#turn.accountController(usage);
     let outcome: StopReason = 'limit';
 
     try {

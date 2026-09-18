@@ -154,35 +154,8 @@ no crash-recovery guarantee, and this phase never resumes an interrupted write.
 
 ## Compaction
 
-`compactMessages` shrinks a conversation with Jev decisions instead of a summary. It is
-ported from [fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction).
-
-```ts
-import { compactMessages, reductionRatio } from '@keeled/jev';
-
-const result = await compactMessages(messages, { preserveRecentMessages: 2 });
-if (reductionRatio(result) >= 0.25) messages = result.messages;
-```
-
-For each finished tool part, Jev answers two `noul` questions: whether the call still matters,
-and whether its full result must stay verbatim. Jev sees the whole conversation with the tool
-results left out. Against `keepThreshold`, each call is kept, has its result truncated to a
-head and a note, or is removed. Text and data parts are never changed, and untouched messages
-come back as the same objects. The history is fitted into `maxStateTokens` in stages, and the
-questions are split so each request stays under `maxRequestTokens`.
-
-Only closed turns are compacted. The first message, the newest `preserveRecentMessages`, and
-every part after the last terminal transition are pinned, so reducing the compacted messages
-yields the same state. The checkpoint in message metadata keeps a copy of each tool output,
-and that copy is compacted the same way.
-
-A truncated output is replaced by a string. If the host validates stored messages against tool
-output schemas (for example with `validateUIMessages`), that check fails on truncated parts.
-
-Jev failures, malformed answers, and histories that cannot be fitted throw an error. The host
-decides whether to keep the original messages.
-
-Compaction is off by default. To have the agent compact before each turn, switch it on:
+Compaction is non-destructive. It never rewrites stored messages. It changes the *view* of the
+history that a turn runs on, the same approach as Cloudflare Think.
 
 ```ts
 import { jev, jevCompactor } from '@keeled/jev';
@@ -194,16 +167,53 @@ const agent = createAgent({
 });
 ```
 
-When the serialised history is over `thresholdChars`, the turn runs on the compacted history,
-and `result.messages` returns it. A `compaction` transition records the sizes before and after
-and what Jev decided. Jev usage counts toward the controller usage. If Jev removes less than
-`minReduction`, the history is kept unchanged. If compaction fails, the full history is kept and
-the turn continues. `compactor` accepts any function, so core does not depend on Jev.
+Compaction is off by default. Before each turn, the runtime builds the view by applying
+every compaction already recorded in the messages. If the serialised view is over
+`thresholdChars`, it asks the compactor for an edit. An edit can do two things:
+- remove or rewrite tool parts, by tool call id;
+- replace the messages before a given message with a summary.
+
+The runtime records the edit as a `data-compaction` part in the turn's message and runs the
+turn on the edited view. `result.messages` still holds the full history, plus the record.
+`compactedView(messages)` rebuilds the view whenever it is needed.
+
+Because the trigger measures the view, a recorded compaction keeps later turns under the
+threshold without compacting again. This holds even when a client such as `useChat` resends
+its full history.
+
+The runtime rejects an edit that would change the state reduced from the open turn (every
+part after the last terminal transition), and records that rejection. A failed compaction is
+recorded too. In both cases the turn continues on the unchanged view. Compactor usage counts
+toward the turn. `compactor` accepts any function, so core does not depend on Jev.
+
+The runtime already projects only text into model calls and keeps controller evidence to the
+current turn. So today the view mainly shrinks the text transcript given to models, and what
+tools and `respond` adapters see through `context.conversation`.
+
+### Jev compaction
+
+`jevCompactor` and `compactMessages` from `@keeled/jev` are ported from
+[fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction). For each finished tool
+part, Jev answers two `noul` questions: whether the call still matters, and whether its full
+result must stay verbatim. Jev sees the whole conversation with the tool results left out.
+Against `keepThreshold`, each call is kept, has its result truncated to a head and a note, or
+is removed. Text and data parts are never changed. The history is fitted into
+`maxStateTokens` in stages, and the questions are split so each request stays under
+`maxRequestTokens`.
+
+The first message, the newest `preserveRecentMessages`, and the open turn are never
+candidates. The checkpoint in message metadata keeps a copy of each tool output, and that copy
+is edited the same way in the view. If Jev would remove less than `minReduction`, no edit is
+made. Called directly, `compactMessages` returns both the `edit` and the resulting view, and
+throws an error on Jev failures, malformed answers, and histories it cannot fit.
+
+In the view, a truncated output is a string. That only matters to code that reads the view
+and checks it against tool output schemas. The stored parts keep their original outputs.
 
 ### Summary compaction
 
 `summaryCompactor` from `@keeled/core` is the standard alternative. It uses a model to
-replace the older messages with one summary.
+replace the older messages in the view with one summary.
 
 ```ts
 import { summaryCompactor } from '@keeled/core';
@@ -213,27 +223,19 @@ compaction: { compactor: summaryCompactor({ keepRecentMessages: 2 }), thresholdC
 
 | | `jevCompactor` | `summaryCompactor` |
 | --- | --- | --- |
-| Removes | Stale tool calls and results | Everything older than the kept tail |
+| Removes from the view | Stale tool calls and results | Everything older than the kept tail |
 | What stays | Verbatim | A model's summary of it |
 | Text messages | Never changed | Summarized |
 | Cost | Jev requests (controller usage) | One model call (model usage) |
 
-The summary is an assistant message marked with `metadata.summary`. That way, tool output
-quoted in the summary never gets the authority of a user message. The newest
-`keepRecentMessages`, the latest user request, and the open turn are always kept word for
-word. The summarizer uses the agent's model by default (`model` overrides it). It sees text,
-plans, blockers, and tool inputs and outputs, each clipped to `maxToolChars`. If the transcript
-is longer than `maxTranscriptChars`, the oldest entries are left out. On later compactions, the
-previous summary is summarized again together with the newer messages. An empty summary
-counts as a failure, so the full history is kept.
-
-The host must store `result.messages` for the saving to last. A client that resends its own
-full history on every request, as `useChat` does by default, pays for a Jev call on each turn
-over the threshold.
-
-The runtime already projects only text into model calls and keeps controller evidence to the
-current turn. So compaction mostly reduces what the host stores and resends. It also reduces
-what tools and `respond` adapters see through `context.conversation`.
+In the view, the summary is an assistant message marked with `metadata.summary`. That way,
+tool output quoted in the summary never gets the authority of a user message. The newest
+`keepRecentMessages`, the latest user request, and the open turn are always kept word for word.
+The summarizer uses the agent's model by default (`model` overrides it). It sees text, plans,
+blockers, and tool inputs and outputs, each clipped to `maxToolChars`. If the transcript is
+longer than `maxTranscriptChars`, the oldest entries are left out. On later compactions, the
+previous summary is summarized again together with the newer messages. An empty summary counts
+as a failure.
 
 ## Policy
 

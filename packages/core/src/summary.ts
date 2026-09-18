@@ -1,7 +1,6 @@
 import type { LanguageModel } from 'ai';
 import { openTurnStart, type Compactor } from './compaction.ts';
 import { HarnessError } from './errors.ts';
-import { createId } from './ids.ts';
 import type { AgentMessage, BlockerRecord, PlanRecord } from './types.ts';
 
 export interface SummaryCompactorOptions {
@@ -37,12 +36,13 @@ const summarySystem = [
 ].join('\n');
 
 /**
- * A compactor that replaces the older messages with one summary written by a model, the
- * standard approach to compaction. Unlike Jev compaction it is lossy: exact tool output that
- * is not quoted in the summary is gone. A previous summary is summarized again with the rest.
+ * A compactor that replaces the older messages in the view with one summary written by a
+ * model, the standard approach to compaction. The stored messages are kept, but the model no
+ * longer sees exact tool output that the summary does not quote. A previous summary is
+ * summarized again with the rest.
  *
- * The summary is an assistant message, so tool output quoted in it never gains the authority
- * of a user message. It carries `metadata.summary`.
+ * In the view, the summary is an assistant message, so tool output quoted in it never gains
+ * the authority of a user message. It carries `metadata.summary`.
  */
 export function summaryCompactor(options: SummaryCompactorOptions = {}): Compactor {
   const keep = Math.max(0, Math.floor(options.keepRecentMessages ?? 2));
@@ -51,7 +51,8 @@ export function summaryCompactor(options: SummaryCompactorOptions = {}): Compact
 
   return async (messages, context) => {
     const start = keptTailStart(messages, keep);
-    if (start === 0) return { messages: [...messages], detail: 'Nothing was old enough to summarize.' };
+    const firstKept = messages[start];
+    if (start === 0 || firstKept === undefined) return { detail: 'Nothing was old enough to summarize.' };
 
     const older = messages.slice(0, start);
     const transcript = renderTranscript(older, maxToolChars, maxTranscriptChars);
@@ -65,15 +66,9 @@ export function summaryCompactor(options: SummaryCompactorOptions = {}): Compact
     const text = result.text.trim();
     if (text.length === 0) throw new HarnessError('The summarizer returned no text.');
 
-    const summary: AgentMessage = {
-      id: createId('summary'),
-      role: 'assistant',
-      parts: [{ type: 'text', text: `${summaryPrefix}\n\n${text}` }],
-      metadata: { summary: { replacedMessages: older.length } },
-    };
     const truncated = result.finishReason === 'length' ? ' The summary hit the output limit.' : '';
     return {
-      messages: [summary, ...messages.slice(start)],
+      edit: { summary: { text: `${summaryPrefix}\n\n${text}`, firstKeptMessageId: firstKept.id } },
       detail: `Summarized ${older.length} messages.${truncated}`,
     };
   };

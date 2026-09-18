@@ -7,6 +7,7 @@ import type { AvailableTool, ControllerContext, ControllerDecision } from './con
 import type {
   AgentMessage,
   BlockerRecord,
+  CompactionRecord,
   DecisionRecord,
   ExecutionState,
   PlanRecord,
@@ -165,6 +166,10 @@ export class Turn {
     return record;
   }
 
+  recordCompaction(record: CompactionRecord): void {
+    this.#record({ type: 'data-compaction', id: record.id, data: record });
+  }
+
   recordBlockedCompletion(verification: VerificationSummary | undefined): void {
     const reasons: string[] = [];
     if (verification !== undefined) {
@@ -304,6 +309,7 @@ function toPart(chunk: Chunk, parts: AgentMessage['parts']): AgentMessage['parts
     case 'data-verification':
     case 'data-blocker':
     case 'data-transition':
+    case 'data-compaction':
       return chunk as AgentMessage['parts'][number];
     case 'text-start':
       return { type: 'text', text: '', state: 'streaming' };

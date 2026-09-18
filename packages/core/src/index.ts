@@ -2,15 +2,15 @@ export { Agent, compileDefinition, createAgent } from './agent.ts';
 export type { AgentConfig, AgentDefinition, RunOptions } from './agent.ts';
 
 export { AgentExecution } from './execution.ts';
-export { compactHistory, openTurnStart } from './compaction.ts';
+export { applyCompactionEdit, compactedView, openTurnStart, prepareHistory } from './compaction.ts';
 export { summaryCompactor } from './summary.ts';
 export type { SummaryCompactorOptions } from './summary.ts';
 export type {
-  CompactedHistory,
   CompactionConfig,
   CompactionContext,
   CompactionOutcome,
   Compactor,
+  PreparedHistory,
   ResolvedCompaction,
 } from './compaction.ts';
 export type { RespondAdapter, RespondContext } from './execution.ts';
@@ -76,6 +76,8 @@ export type {
   AgentResult,
   Blocker,
   BlockerRecord,
+  CompactionEdit,
+  CompactionRecord,
   CompletionBasis,
   DecisionRecord,
   ExecutionState,
@@ -89,6 +91,7 @@ export type {
   StateCheckpoint,
   StepVerification,
   StopReason,
+  ToolPartEdit,
   TransitionRecord,
   UsageBucket,
   UsageTotals,

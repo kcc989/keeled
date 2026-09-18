@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { createAgent } from '../src/agent.ts';
-import type { CompactionContext } from '../src/compaction.ts';
+import { applyCompactionEdit, compactedView, type CompactionContext } from '../src/compaction.ts';
 import { reduceState } from '../src/state.ts';
 import { summaryCompactor, summaryPrefix } from '../src/summary.ts';
 import { scriptedController, stubModel, userMessage } from '../src/testing.ts';
-import type { AgentMessage, TransitionRecord } from '../src/types.ts';
+import type { AgentMessage, CompactionRecord } from '../src/types.ts';
 import { searchTool } from './fixtures.ts';
 
 type Compaction = Parameters<typeof createAgent>[0]['compaction'];
@@ -55,15 +55,14 @@ function context(text: string, prompts: string[] = []): CompactionContext {
   };
 }
 
-function transitionDetail(messages: AgentMessage[]): string | undefined {
+function compactionRecord(messages: AgentMessage[]): CompactionRecord | undefined {
   return (messages.at(-1)?.parts ?? [])
-    .filter(part => part.type === 'data-transition')
-    .map(part => (part as { data: TransitionRecord }).data)
-    .find(record => record.kind === 'compaction')?.detail;
+    .filter(part => part.type === 'data-compaction')
+    .map(part => (part as { data: CompactionRecord }).data)[0];
 }
 
 describe('summaryCompactor', () => {
-  test('replaces the older messages with a summary before the turn', async () => {
+  test('replaces the older messages with a summary in the view', async () => {
     const messages = await conversation();
     const { stub, prompts } = model();
     const result = await agent(stub, {
@@ -72,21 +71,29 @@ describe('summaryCompactor', () => {
     }).run({ messages });
 
     expect(result.stopReason).toBe('completed');
-    const [summary, ...rest] = result.messages;
+    // The stored history keeps every message.
+    expect(result.messages.slice(0, messages.length)).toEqual(messages);
+    expect(result.messages).toHaveLength(messages.length + 1);
+
+    const [summary, ...rest] = compactedView(result.messages);
     expect(summary?.role).toBe('assistant');
     expect(summary?.metadata?.summary).toEqual({ replacedMessages: 3 });
     expect((summary?.parts[0] as { text: string }).text).toBe(
       `${summaryPrefix}\n\nThe user wants the price helper; search found src/index.ts.`,
     );
     expect(rest.slice(0, 2)).toEqual([messages[3]!, messages[4]!]);
-    expect(result.messages).toHaveLength(4);
+    expect(rest).toHaveLength(3);
 
     // The summarizer saw the user's words and the tool evidence, and its usage was counted.
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain('Where is the price helper?');
     expect(prompts[0]).toContain('src/pricing.ts');
     expect(result.usage.model.calls).toBe(2);
-    expect(transitionDetail(result.messages)).toContain('Summarized 3 messages.');
+    expect(compactionRecord(result.messages)).toMatchObject({
+      outcome: 'applied',
+      detail: 'Summarized 3 messages.',
+      edit: { summary: { firstKeptMessageId: messages[3]!.id } },
+    });
   });
 
   test('keeps the latest request and the open turn intact', async () => {
@@ -103,10 +110,11 @@ describe('summaryCompactor', () => {
     const history = [...messages.slice(0, 3), open];
 
     const outcome = await summaryCompactor({ keepRecentMessages: 0 })(history, context('Earlier work.'));
+    const view = applyCompactionEdit(history, outcome.edit!, 'cmp');
 
-    expect(outcome.messages.map(message => message.id).slice(1)).toEqual(['u2', open.id]);
-    expect(outcome.messages[2]).toBe(open);
-    expect(reduceState(outcome.messages)).toEqual(reduceState(history));
+    expect(view.map(message => message.id)).toEqual(['cmp-summary', 'u2', open.id]);
+    expect(view[2]).toBe(open);
+    expect(reduceState(view)).toEqual(reduceState(history));
   });
 
   test('keeps the open turn even with no user request to anchor on', async () => {
@@ -124,8 +132,7 @@ describe('summaryCompactor', () => {
 
     const outcome = await summaryCompactor({ keepRecentMessages: 0 })(history, context('Earlier work.'));
 
-    expect(outcome.messages).toHaveLength(2);
-    expect(outcome.messages[1]).toBe(open);
+    expect(outcome.edit?.summary?.firstKeptMessageId).toBe(open.id);
   });
 
   test('does nothing when no turn has finished', async () => {
@@ -133,7 +140,7 @@ describe('summaryCompactor', () => {
     const history = [userMessage('Hello', 'u1')];
     const outcome = await summaryCompactor()(history, context('unused', prompts));
 
-    expect(outcome.messages).toEqual(history);
+    expect(outcome.edit).toBeUndefined();
     expect(prompts).toHaveLength(0);
   });
 
@@ -145,10 +152,11 @@ describe('summaryCompactor', () => {
     });
 
     expect(result.stopReason).toBe('completed');
-    expect(result.messages.slice(0, messages.length)).toEqual(messages);
-    expect(transitionDetail(result.messages)).toBe(
-      'Compaction failed; the full history was kept. The summarizer returned no text.',
-    );
+    expect(compactedView(result.messages).slice(0, messages.length)).toEqual(messages);
+    expect(compactionRecord(result.messages)).toMatchObject({
+      outcome: 'failed',
+      detail: 'Compaction failed. The summarizer returned no text.',
+    });
   });
 
   test('leaves out the oldest entries when the transcript is too long', async () => {

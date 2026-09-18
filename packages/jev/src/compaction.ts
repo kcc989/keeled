@@ -1,6 +1,7 @@
 import { TypeSafeClient, noul } from '@typesafe-ai/sdk';
 import type { JsonValue, Questions, Usage } from '@typesafe-ai/sdk';
-import type { AgentMessage, Compactor, Observation, StateCheckpoint, UsageBucket } from '@keeled/core';
+import { applyCompactionEdit } from '@keeled/core';
+import type { AgentMessage, CompactionEdit, Compactor, ToolPartEdit, UsageBucket } from '@keeled/core';
 import {
   asToolPart,
   collectToolCalls,
@@ -16,7 +17,8 @@ import {
 /**
  * Compaction by Jev decisions instead of a summary: every finished tool call outside the
  * pinned messages is scored, stale results are truncated or removed together with their
- * call, and everything kept stays verbatim. Text and data parts are never touched.
+ * call, and everything kept stays verbatim. Text and data parts are never touched. The result
+ * is an edit to the view of the history; the stored messages are not changed.
  *
  * Ported from fast-jev-compaction (https://github.com/tamaratran/fast-jev-compaction, MIT).
  */
@@ -82,8 +84,13 @@ export interface CallDecision extends CallAnswer {
 }
 
 export interface CompactionResult {
-  /** The compacted conversation; untouched messages are the input objects. */
+  /**
+   * The compacted view: the input with `edit` applied. Untouched messages are the input
+   * objects. Keep storing the input; the view is for reading.
+   */
   messages: AgentMessage[];
+  /** The edit, for `applyCompactionEdit` or a compaction record. */
+  edit: CompactionEdit;
   decisions: CallDecision[];
   stats: {
     messagesBefore: number;
@@ -229,94 +236,34 @@ function truncatedResult(text: string, isError: boolean, headChars: number): str
   } were removed; run the tool again if needed.]`;
 }
 
-type Part = AgentMessage['parts'][number];
-
 /**
- * Rebuilds the conversation from the decisions. A dropped call disappears with its result.
- * A dropped result keeps a bounded head and a note: an output becomes that string, and an
- * error text is shortened. The checkpoint in message metadata gets the same treatment, since
- * it holds a copy of every tool output. Untouched messages are returned as the same objects;
- * a message left without parts is removed.
+ * Turns the decisions into a tool edit for the compacted view. A dropped call is removed with
+ * its result. A dropped result keeps a bounded head and a note: an output becomes that string,
+ * and an error text is shortened. Results already short enough are left alone.
  */
-export function applyDecisions(
+export function editFromDecisions(
   messages: readonly AgentMessage[],
   decisions: readonly CallDecision[],
   calls: readonly CompactionCall[],
   headChars: number,
-): AgentMessage[] {
+): CompactionEdit {
   const byId = new Map(calls.map(call => [call.id, call]));
-  const byPosition = new Map<string, CallAction>();
-  const byToolCallId = new Map<string, CallAction>();
+  const tools: Record<string, ToolPartEdit> = {};
   for (const decision of decisions) {
     const call = byId.get(decision.id);
     if (call === undefined || decision.action === 'keep') continue;
-    byPosition.set(`${call.messageIndex}:${call.partIndex}`, decision.action);
-    byToolCallId.set(call.toolCallId, decision.action);
+    if (decision.action === 'drop_call') {
+      tools[call.toolCallId] = { remove: true };
+      continue;
+    }
+    const part = messages[call.messageIndex]?.parts[call.partIndex];
+    const tool = part === undefined ? undefined : asToolPart(part);
+    if (tool === undefined) continue;
+    const text = truncatedResult(resultText(tool), call.isError, headChars);
+    if (text === undefined) continue;
+    tools[call.toolCallId] = call.isError ? { errorText: text } : { output: text };
   }
-
-  const result: AgentMessage[] = [];
-  messages.forEach((message, messageIndex) => {
-    let changed = false;
-    const parts: Part[] = [];
-    message.parts.forEach((part, partIndex) => {
-      const action = byPosition.get(`${messageIndex}:${partIndex}`);
-      const tool = action === undefined ? undefined : asToolPart(part);
-      if (action === undefined || tool === undefined) {
-        parts.push(part);
-        return;
-      }
-      if (action === 'drop_call') {
-        changed = true;
-        return;
-      }
-      const isError = tool.state === 'output-error';
-      const text = truncatedResult(resultText(tool), isError, headChars);
-      if (text === undefined) {
-        parts.push(part);
-        return;
-      }
-      changed = true;
-      parts.push({ ...part, ...(isError ? { errorText: text } : { output: text }) } as Part);
-    });
-
-    const checkpoint = compactCheckpoint(message.metadata?.checkpoint, byToolCallId, headChars);
-    if (!changed && checkpoint === message.metadata?.checkpoint) {
-      result.push(message);
-      return;
-    }
-    if (parts.length === 0) return;
-    result.push({
-      ...message,
-      parts,
-      ...(message.metadata === undefined ? {} : { metadata: { ...message.metadata, checkpoint } }),
-    });
-  });
-  return result;
-}
-
-function compactCheckpoint(
-  checkpoint: StateCheckpoint | undefined,
-  actions: ReadonlyMap<string, CallAction>,
-  headChars: number,
-): StateCheckpoint | undefined {
-  if (checkpoint === undefined) return undefined;
-  let changed = false;
-  const observations = checkpoint.state.observations.map((observation): Observation => {
-    const action = actions.get(observation.id);
-    if (action === undefined || observation.kind !== 'tool-result' || observation.detail === undefined) {
-      return observation;
-    }
-    if (action === 'drop_call') {
-      changed = true;
-      const { detail: _detail, ...rest } = observation;
-      return rest;
-    }
-    const text = truncatedResult(json(observation.detail), false, headChars);
-    if (text === undefined) return observation;
-    changed = true;
-    return { ...observation, detail: text };
-  });
-  return changed ? { ...checkpoint, state: { ...checkpoint.state, observations } } : checkpoint;
+  return { tools };
 }
 
 /** The share of serialised characters compaction removed, from 0 to 1. */
@@ -385,9 +332,11 @@ export async function compactMessages(
   const decisions = calls.map(call =>
     decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved.keepThreshold),
   );
-  const compacted = applyDecisions(messages, decisions, calls, resolved.truncateHeadChars);
+  const edit = editFromDecisions(messages, decisions, calls, resolved.truncateHeadChars);
+  const compacted = applyCompactionEdit(messages, edit, 'jev');
   return {
     messages: compacted,
+    edit,
     decisions,
     stats: {
       messagesBefore: messages.length,
@@ -409,13 +358,13 @@ export async function compactMessages(
 }
 
 export interface JevCompactorOptions extends Omit<CompactionOptions, 'abortSignal'> {
-  /** Keep the history unchanged unless compaction removes at least this share. Default 0.25. */
+  /** Leave the view unchanged unless compaction removes at least this share. Default 0.25. */
   minReduction?: number;
 }
 
 /**
  * A compactor for `createAgent({ compaction: { compactor: jevCompactor() } })`. When the
- * reduction falls under `minReduction`, the history is kept unchanged.
+ * reduction falls under `minReduction`, it proposes no edit.
  */
 export function jevCompactor(options: JevCompactorOptions = {}): Compactor {
   const minReduction = finite(options.minReduction, 0.25);
@@ -426,11 +375,10 @@ export function jevCompactor(options: JevCompactorOptions = {}): Compactor {
     const counts = `Jev kept ${kept}, truncated ${resultsDropped}, and removed ${callsDropped} tool calls.`;
     if (ratio < minReduction) {
       return {
-        messages: [...messages],
         usage: result.stats.usage,
-        detail: `${counts} The ${Math.round(ratio * 100)}% reduction is under the minimum, so the history is unchanged.`,
+        detail: `${counts} The ${Math.round(ratio * 100)}% reduction is under the minimum, so the view is unchanged.`,
       };
     }
-    return { messages: result.messages, usage: result.stats.usage, detail: counts };
+    return { edit: result.edit, usage: result.stats.usage, detail: counts };
   };
 }
