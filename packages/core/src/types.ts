@@ -120,6 +120,8 @@ export interface AgentMetadata {
   stopReason?: StopReason;
   usage?: UsageTotals;
   checkpoint?: StateCheckpoint;
+  /** Set on a message that replaces earlier messages with a summary. */
+  summary?: { replacedMessages: number };
 }
 
 export interface DecisionRecord {
@@ -157,7 +159,15 @@ export interface BlockerRecord extends Blocker {}
 export interface TransitionRecord {
   id: string;
   cycle: number;
-  kind: 'cycle-start' | 'limit' | 'cancelled' | 'error' | 'finish' | 'policy-block' | 'blocked-completion';
+  kind:
+    | 'cycle-start'
+    | 'limit'
+    | 'cancelled'
+    | 'error'
+    | 'finish'
+    | 'policy-block'
+    | 'blocked-completion'
+    | 'compaction';
   detail?: string;
   stopReason?: StopReason;
 }

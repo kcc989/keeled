@@ -6,5 +6,8 @@
   "dependencies": {
     "@keeled/core": "workspace:*",
     "@typesafe-ai/sdk": "0.6.0"
+  },
+  "devDependencies": {
+    "zod": "^4.1.8"
   }
 }

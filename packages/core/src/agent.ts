@@ -1,4 +1,5 @@
 import type { LanguageModel } from 'ai';
+import type { CompactionConfig, ResolvedCompaction } from './compaction.ts';
 import { ConfigurationError } from './errors.ts';
 import { AgentExecution, type RespondAdapter } from './execution.ts';
 import { registerTools, type AgentToolSet, type RegisteredTool } from './tool.ts';
@@ -17,6 +18,8 @@ export interface AgentConfig<TOOLS extends AgentToolSet> {
   /** Replaces the default final-response generator. */
   respond?: RespondAdapter;
   policy?: AgentPolicy;
+  /** Compacts the history before a turn once it grows past a threshold. Off when omitted. */
+  compaction?: CompactionConfig;
 }
 
 export interface RunOptions {
@@ -34,6 +37,7 @@ export interface AgentDefinition<TOOLS extends AgentToolSet> {
   planningTool?: string;
   respond?: RespondAdapter;
   policy: ResolvedPolicy;
+  compaction?: ResolvedCompaction;
 }
 
 const defaultRisks: readonly Risk[] = ['read', 'write', 'destructive', 'unknown'];
@@ -61,6 +65,15 @@ export function compileDefinition<TOOLS extends AgentToolSet>(
     throw new ConfigurationError('policy.inferredConfidenceFloor must be between 0 and 1.');
   }
 
+  let compaction: ResolvedCompaction | undefined;
+  if (config.compaction !== undefined) {
+    const thresholdChars = config.compaction.thresholdChars ?? 100_000;
+    if (!(thresholdChars >= 0)) {
+      throw new ConfigurationError('compaction.thresholdChars must be zero or more.');
+    }
+    compaction = { compactor: config.compaction.compactor, thresholdChars };
+  }
+
   return {
     instructions: config.instructions,
     controller: config.controller,
@@ -80,6 +93,7 @@ export function compileDefinition<TOOLS extends AgentToolSet>(
       allowedRisks: new Set(policy.allowedRisks ?? defaultRisks),
       inferredConfidenceFloor: floor,
     },
+    compaction,
   };
 }
 
