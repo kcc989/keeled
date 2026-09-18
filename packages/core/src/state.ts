@@ -56,20 +56,33 @@ export function reduceState(messages: readonly AgentMessage[]): ExecutionState {
   }
 
   const state = emptyState();
+  const context: ReduceContext = {};
   for (const part of parts.slice(start)) {
-    applyPart(state, part);
+    applyPart(state, part, context);
   }
   if (start > 0 && start === parts.length) state.stopReason = stopReason;
   return state;
 }
 
-function applyPart(state: ExecutionState, part: AgentMessage['parts'][number]): void {
+/** The decision currently in effect, which attributes the tool parts that follow it. */
+interface ReduceContext {
+  tool?: string;
+  stepId?: string;
+}
+
+function applyPart(
+  state: ExecutionState,
+  part: AgentMessage['parts'][number],
+  context: ReduceContext,
+): void {
   const type = part.type;
 
   if (type === 'data-decision') {
     const record = (part as { data: DecisionRecord }).data;
     state.cycle = Math.max(state.cycle, record.cycle);
     state.stepsUsed += 1;
+    context.tool = record.action.type === 'tool' ? record.action.tool : undefined;
+    context.stepId = record.action.type === 'tool' ? record.action.stepId : undefined;
     return;
   }
 
@@ -104,14 +117,19 @@ function applyPart(state: ExecutionState, part: AgentMessage['parts'][number]): 
   if (type === 'data-verification') {
     const record = (part as { data: VerificationRecord }).data;
     for (const [stepId, verification] of Object.entries(record.summary.steps)) {
+      // `unknown` reports absent evidence, not a failure, so it never overwrites a
+      // recorded result. Only a `failed` result or a plan revision regresses a step.
+      if (verification.outcome === 'unknown' && state.verification[stepId] !== undefined) continue;
       state.verification[stepId] = verification;
       if (verification.outcome === 'passed') {
         state.stepStatuses[stepId] = 'done';
-      } else if (state.stepStatuses[stepId] === 'done') {
+      } else if (verification.outcome === 'failed' && state.stepStatuses[stepId] === 'done') {
         state.stepStatuses[stepId] = 'pending';
       }
     }
-    state.goal = record.summary.goal;
+    if (!(record.summary.goal.outcome === 'unknown' && state.goal !== undefined)) {
+      state.goal = record.summary.goal;
+    }
     return;
   }
 
@@ -136,7 +154,7 @@ function applyPart(state: ExecutionState, part: AgentMessage['parts'][number]): 
   }
 
   if (type.startsWith('tool-') || type === 'dynamic-tool') {
-    applyToolPart(state, part as ToolPartLike);
+    applyToolPart(state, part as ToolPartLike, context);
   }
 }
 
@@ -150,9 +168,13 @@ interface ToolPartLike {
   errorText?: string;
 }
 
-function applyToolPart(state: ExecutionState, part: ToolPartLike): void {
-  const toolName = part.toolName ?? part.type.slice('tool-'.length);
-  const stepId = readStepId(part.output) ?? undefined;
+function applyToolPart(state: ExecutionState, part: ToolPartLike, context: ReduceContext): void {
+  const toolName =
+    part.toolName ??
+    (part.type.startsWith('tool-') ? part.type.slice('tool-'.length) : context.tool) ??
+    'unknown';
+  // The step comes from the decision that selected this call, never from its output.
+  const stepId = context.stepId;
 
   if (part.state === 'output-available') {
     state.toolCalls += 1;
@@ -175,19 +197,12 @@ function applyToolPart(state: ExecutionState, part: ToolPartLike): void {
       cycle: state.cycle,
       kind: 'tool-error',
       tool: toolName,
+      stepId,
       summary: part.errorText ?? `${toolName} failed.`,
       detail: part.input,
     };
     state.observations.push(observation);
   }
-}
-
-function readStepId(output: unknown): string | undefined {
-  if (typeof output === 'object' && output !== null && 'stepId' in output) {
-    const value = (output as { stepId: unknown }).stepId;
-    if (typeof value === 'string') return value;
-  }
-  return undefined;
 }
 
 export function statusesFor(plan: Plan | undefined, statuses: Record<string, StepStatus>): Record<string, StepStatus> {

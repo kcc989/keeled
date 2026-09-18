@@ -228,6 +228,8 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
 
     const floor = this.#policy.inferredConfidenceFloor;
     const plan = this.#turn.plan;
+    const planVersion = plan?.version ?? 0;
+    const retained = this.#turn.state.verification;
     const steps: VerificationSummary['steps'] = {};
 
     for (const step of plan?.steps ?? []) {
@@ -238,12 +240,22 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
           : result.complete
             ? 'passed'
             : 'failed';
+
+      // An assessment that is merely uncertain reports no evidence, so a result already
+      // recorded against this plan revision stands. Only new evidence or a plan
+      // revision invalidates it.
+      const previous = retained[step.id];
+      if (outcome === 'unknown' && previous !== undefined && previous.planVersion === planVersion) {
+        steps[step.id] = previous;
+        continue;
+      }
+
       steps[step.id] = {
         stepId: step.id,
         outcome,
         basis: 'inferred',
         confidence: result?.confidence,
-        planVersion: plan?.version ?? 0,
+        planVersion,
       };
     }
 
@@ -254,13 +266,19 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
           ? 'passed'
           : 'failed';
 
+    const retainedGoal = this.#turn.state.goal;
+    const goal: VerificationSummary['goal'] =
+      goalOutcome === 'unknown' && retainedGoal !== undefined
+        ? retainedGoal
+        : { outcome: goalOutcome, basis: 'inferred', confidence: assessment.goalMet.confidence };
+
     const summary: VerificationSummary = {
       steps,
-      goal: { outcome: goalOutcome, basis: 'inferred', confidence: assessment.goalMet.confidence },
+      goal,
       planValid: assessment.planValid.valid,
       planValidConfidence: assessment.planValid.confidence,
       canComplete:
-        goalOutcome === 'passed' &&
+        goal.outcome === 'passed' &&
         Object.values(steps).every(step => step.outcome === 'passed'),
       basis: 'inferred',
     };

@@ -90,16 +90,7 @@ export class Turn {
 
   beginCycle(): void {
     this.#cycle += 1;
-    this.#record({
-      type: 'data-transition',
-      id: createId('tr'),
-      data: {
-        id: createId('tr'),
-        cycle: this.#cycle,
-        kind: 'cycle-start',
-        detail: `Cycle ${this.#cycle}`,
-      },
-    });
+    this.#transition({ kind: 'cycle-start', detail: `Cycle ${this.#cycle}` });
   }
 
   decisionContext(
@@ -188,34 +179,23 @@ export class Turn {
       reasons.length > 0
         ? `Completion was requested but ${reasons.join(', ')}.`
         : 'Completion was requested but progress does not support it.';
-    this.#record({
-      type: 'data-transition',
-      id: createId('tr'),
-      data: { id: createId('tr'), cycle: this.#cycle, kind: 'blocked-completion', detail },
-    });
+    this.#transition({ kind: 'blocked-completion', detail });
     this.recordBlocker(detail);
   }
 
   recordRuntimeError(error: unknown): void {
     const aborted = this.isAborted() || isAbortError(error);
-    this.#record({
-      type: 'data-transition',
-      id: createId('tr'),
-      data: {
-        id: createId('tr'),
-        cycle: this.#cycle,
-        kind: aborted ? 'cancelled' : 'error',
-        detail: errorMessage(error),
-      },
-    });
+    this.#transition({ kind: aborted ? 'cancelled' : 'error', detail: errorMessage(error) });
   }
 
   recordTransition(kind: TransitionRecord['kind'], detail?: string, stopReason?: StopReason): void {
-    this.#record({
-      type: 'data-transition',
-      id: createId('tr'),
-      data: { id: createId('tr'), cycle: this.#cycle, kind, detail, stopReason },
-    });
+    this.#transition({ kind, detail, stopReason });
+  }
+
+  /** One id identifies a transition, as both the part id and the record id. */
+  #transition(fields: Omit<TransitionRecord, 'id' | 'cycle'>): void {
+    const record: TransitionRecord = { ...fields, id: createId('tr'), cycle: this.#cycle };
+    this.#record({ type: 'data-transition', id: record.id, data: record });
   }
 
   recordToolInput(toolCallId: string, toolName: string, input: unknown): void {

@@ -121,6 +121,12 @@ invalidated.
 Phase 1 uses the controller's judgment for step and goal completion, so completion is
 labelled `inferred`. It is never labelled `verified`. Explicit conditions arrive in Phase 3.
 
+Verification results are kept apart from the plan. A result is `passed`, `failed` or
+`unknown`, and the three are not interchangeable: `unknown` reports absent evidence, so it
+never overwrites a result already recorded against the current plan revision. Only a
+`failed` result or a plan revision regresses a step. Without that rule a controller whose
+confidence merely wobbled would un-complete finished work.
+
 ## Messages and state
 
 The conversation uses AI SDK UI messages. Tool calls and results stay SDK tool parts. Data
@@ -133,6 +139,9 @@ type AgentMessage = UIMessage<AgentMetadata, AgentDataParts, InferAgentUITools<t
 
 `InferAgentUITools` applies the SDK's `InferUITools` to a type-only projection of the tool
 map, so both tool forms keep their names and input/output types.
+
+Tool evidence is attributed to the step named by the decision that selected the call, never
+to anything the tool returned.
 
 A pure, versioned reducer derives state from the persisted parts. It never re-runs the
 controller or the tools. A terminal transition closes a turn, so a replay of a finished
