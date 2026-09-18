@@ -1,0 +1,14 @@
+{
+  "name": "@keeled/core",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/provider-utils": "5.0.43",
+    "ai": "7.0.105",
+    "zod": "^4.1.8"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "@keeled/example-chat",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "demo": "bun run src/demo.ts",
+    "live": "bun run src/live.ts"
+  },
+  "dependencies": {
+    "@keeled/core": "workspace:*",
+    "@keeled/jev": "workspace:*",
+    "ai": "7.0.105",
+    "zod": "^4.1.8"
+  }
+}
