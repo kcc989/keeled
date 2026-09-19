@@ -88,6 +88,7 @@ keep screening runs at one trial until a promising change warrants a larger eval
 | `TYPESAFE_API_KEY` | Keeled `.env` | Jev controller |
 | `OPENROUTER_API_KEY` | Keeled `.env` | Keeled's model calls |
 | `KEELED_MODEL` | Keeled `.env` | OpenRouter model id, e.g. `anthropic/claude-sonnet-4.5` |
+| `KEELED_OBSERVED_ARGUMENTS` | optional | Set to `1` to try Jev-selected, evidence-backed read arguments after exact projection finds none |
 | `OPENROUTER_PROVIDERS` | optional | Provider order, default `together,modal`; no fallback beyond the list |
 | `OPENROUTER_API_KEY` | τ³-bench `.env` | User simulator |
 | `TAU2_USER_LLM` | optional | User simulator model, default `openrouter/openai/gpt-4.1` |

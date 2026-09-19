@@ -12,6 +12,9 @@ bun run microbench --mode candidates
 # Live argument resolution; uses KEELED_MODEL and OPENROUTER_API_KEY.
 bun run microbench --mode resolver
 
+# Jev over turn-local observed argument domains; uses TYPESAFE_API_KEY.
+bun run microbench --mode observed
+
 # Both layers, repeated sampling, or a focused subset.
 bun run microbench --mode all --trials 3
 bun run microbench --mode resolver --case collection-ids,root-ref
@@ -27,8 +30,10 @@ For scoped or ambiguous requests, `candidateExpected` may contain all safely gro
 possibilities while `expected` contains only the calls the user actually requested. This
 prevents candidate coverage from being confused with semantic selection. Both are grader-only.
 
-The two layers are evaluated independently: candidate coverage is not end-to-end quality,
-and the resolver layer does not test whether Jev would select a ready candidate.
+The layers are evaluated independently. `candidates` measures exact schema projection.
+`observed` keeps exact projection as a fast path, then asks Jev to select evidence-backed
+value domains and their requested members. It never lets Jev generate the values. The
+resolver layer does not test whether the controller would select a ready candidate.
 
 A pass requires complete, unique, schema-valid inputs matching the allowed records.
 Input order does not matter. Extra calls, duplicates, crossed record fields, invalid

@@ -6,6 +6,7 @@ import type { Risk } from './types.ts';
 
 export interface CandidateTool {
   name: string;
+  description?: string;
   parameters: Parameters<typeof jsonSchema>[0];
   risk?: Risk;
 }

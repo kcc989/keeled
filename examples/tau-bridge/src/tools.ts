@@ -1,6 +1,7 @@
 import { jsonSchema, type LanguageModel } from 'ai';
 import {
   MissingInformation,
+  observedReadCandidates,
   schemaReadCandidates,
   agentTool,
   callHistory,
@@ -10,6 +11,7 @@ import {
   type AgentMessage,
   type AgentToolSet,
   type Observation,
+  type ObservedArgumentJudge,
   type RepeatPolicy,
   type RespondAdapter,
   type Risk,
@@ -47,6 +49,7 @@ export function bridgeTools(
   call: ToolCallHandler,
   argumentsModel?: LanguageModel,
   writeArgumentsModel?: LanguageModel,
+  observedArgumentJudge?: ObservedArgumentJudge,
 ): AgentToolSet {
   const tools: AgentToolSet = {};
   for (const spec of specs) {
@@ -56,7 +59,7 @@ export function bridgeTools(
       inputSchema: schema,
       risk: spec.risk ?? 'unknown',
       repeat: spec.repeat ?? 'allow',
-      candidates: schemaReadCandidates(spec, specs),
+      candidates: readCandidates(spec, specs, observedArgumentJudge),
       resolveInput: async context => {
         const model = spec.risk === 'read' ? argumentsModel : (writeArgumentsModel ?? argumentsModel);
         return resolveInput(spec, context, model);
@@ -66,6 +69,22 @@ export function bridgeTools(
     });
   }
   return tools;
+}
+
+/** Exact projection is free and certain; semantic observed domains are its fallback. */
+function readCandidates(
+  spec: ToolSpec,
+  specs: readonly ToolSpec[],
+  judge: ObservedArgumentJudge | undefined,
+) {
+  const exact = schemaReadCandidates(spec, specs);
+  const observed = judge === undefined ? undefined : observedReadCandidates(spec, specs, judge);
+  if (exact === undefined) return observed;
+  if (observed === undefined) return exact;
+  return async (context: AgentContext) => {
+    const projected = await exact(context);
+    return projected.length > 0 ? projected : observed(context);
+  };
 }
 
 /** The description the controller selects on: what the tool does and what it returns. */

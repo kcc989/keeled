@@ -12,6 +12,7 @@ import {
   type ControllerContext,
   type ControllerDecision,
   type NextAction,
+  type ObservedArgumentJudge,
   type PendingAction,
   type StopReason,
   type UsageTotals,
@@ -26,7 +27,7 @@ export interface DecisionLog {
 }
 
 export interface TraceEntry {
-  kind: 'control' | 'authorize' | 'generate';
+  kind: 'control' | 'authorize' | 'generate' | 'observed-arguments';
   ms: number;
   detail?: unknown;
 }
@@ -63,6 +64,8 @@ export interface SessionOptions {
   argumentsModel?: LanguageModel;
   /** Model used for state-changing tool arguments. Defaults to `argumentsModel`. */
   writeArgumentsModel?: LanguageModel;
+  /** Optional semantic adapter for turn-local, evidence-backed read arguments. */
+  observedArgumentJudge?: ObservedArgumentJudge;
   policy?: AgentPolicy;
 }
 
@@ -86,6 +89,25 @@ export class Session {
   constructor(options: SessionOptions) {
     this.#messages = (options.history ?? []).map(entry => textMessage(entry.role, entry.text));
     const trace = (entry: TraceEntry) => this.#trace.push(entry);
+    const observedArgumentJudge: ObservedArgumentJudge | undefined = options.observedArgumentJudge === undefined
+      ? undefined
+      : async (query, context) => {
+          const started = performance.now();
+          const result = await options.observedArgumentJudge!(query, context);
+          trace({
+            kind: 'observed-arguments',
+            ms: Math.round(performance.now() - started),
+            detail: {
+              tool: query.tool.name,
+              argument: query.argument.name,
+              domains: query.domains.length,
+              options: query.domains.reduce((count, domain) => count + domain.options.length, 0),
+              selectedDomain: result.domainId ?? null,
+              selectedOptions: result.optionIds.length,
+            },
+          });
+          return result;
+        };
     this.#agent = createAgent({
       instructions: options.instructions,
       taskTracker: options.trackTasks === false ? undefined : modelTaskTracker({ extractionModel: options.argumentsModel }),
@@ -98,6 +120,7 @@ export class Session {
           (call, signal) => this.#requestTool(call, signal),
           options.argumentsModel === undefined ? undefined : options.argumentsModel,
           options.writeArgumentsModel === undefined ? undefined : options.writeArgumentsModel,
+          observedArgumentJudge,
         ),
         evidence: evidenceTool(),
         arithmetic: evidenceCalculationTool(),

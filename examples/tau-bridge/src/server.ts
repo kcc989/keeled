@@ -7,7 +7,7 @@
  *   POST   /sessions/:id/tool   { id, content, error? }  -> BridgeEvent
  *   DELETE /sessions/:id
  */
-import { jev } from '@keeled/jev';
+import { jev, jevObservedArguments } from '@keeled/jev';
 import { openRouterModels, providersFromEnvironment } from './models.ts';
 import { Session, SessionConflictError, type SessionOptions, type ToolResult } from './session.ts';
 
@@ -21,6 +21,9 @@ if (!modelId || !apiKey) {
 const providers = providersFromEnvironment();
 const { model, argumentsModel, writeArgumentsModel } = openRouterModels(modelId, apiKey, providers);
 const controller = jev();
+const observedArgumentJudge = process.env['KEELED_OBSERVED_ARGUMENTS'] === '1'
+  ? jevObservedArguments()
+  : undefined;
 const policy = { generationTimeoutMs: 60_000, turnTimeoutMs: 240_000 };
 const sessions = new Map<string, Session>();
 const route = /^\/sessions\/([^/]+)(?:\/(user|tool))?$/;
@@ -42,7 +45,7 @@ const server = Bun.serve({
       if (action === undefined && request.method === 'PUT') {
         const body = (await request.json()) as Pick<SessionOptions, 'instructions' | 'tools' | 'history'>;
         sessions.get(id)?.close();
-        sessions.set(id, new Session({ instructions: body.instructions, tools: body.tools, history: body.history, controller, model, argumentsModel, writeArgumentsModel, policy }));
+        sessions.set(id, new Session({ instructions: body.instructions, tools: body.tools, history: body.history, controller, model, argumentsModel, writeArgumentsModel, observedArgumentJudge, policy }));
         return new Response(null, { status: 201 });
       }
       if (action === undefined && request.method === 'DELETE') {
@@ -73,5 +76,5 @@ const server = Bun.serve({
 });
 
 console.log(
-  `Keeled bridge on http://localhost:${server.port} (OpenRouter model ${modelId} via ${providers.join(' → ')})`,
+  `Keeled bridge on http://localhost:${server.port} (OpenRouter model ${modelId} via ${providers.join(' → ')}; observed arguments ${observedArgumentJudge === undefined ? 'off' : 'on'})`,
 );
