@@ -52,6 +52,7 @@ export function jev(options: JevControllerOptions = {}): Controller {
     async control(context: ControllerContext): Promise<ControlResult> {
       const history = callHistory(context);
       const criteria: Record<string, string> = {};
+      const readyCalls = new Map<string, { tool: string; candidateId: string }>();
       for (const tool of context.availableTools) {
         const guidance =
           tool.risk === 'read'
@@ -62,6 +63,15 @@ export function jev(options: JevControllerOptions = {}): Controller {
           guidance +
           `${repetitionNote(tool.name, history)}${blockerNote(tool.name, context.blockers)}` +
           readinessNote(tool, context, history);
+        if (tool.risk === 'read' && tool.candidates?.length) {
+          criteria[tool.name] += ' Use this fallback only when none of the ready calls for this tool fits; its arguments will need resolution.';
+          for (const candidate of tool.candidates) {
+            readyCalls.set(candidate.id, { tool: tool.name, candidateId: candidate.id });
+            criteria[candidate.id] = `Execute ${tool.name} with exact input ${JSON.stringify(candidate.input)}. ` +
+              `${tool.description} ${candidate.description} Evidence: ${candidate.sources.join(', ')}. ` +
+              'Select only when this specific call advances the user request and its result is still needed.';
+          }
+        }
       }
       const notes = respondNotes(context.blockers);
       criteria[respondLabels.needs_input] =
@@ -89,7 +99,7 @@ export function jev(options: JevControllerOptions = {}): Controller {
         outcome === undefined
           ? {
               type: 'tool',
-              tool: label,
+              ...(readyCalls.get(label) ?? { tool: label }),
             }
           : { type: 'respond', outcome };
 

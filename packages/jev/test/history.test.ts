@@ -268,3 +268,29 @@ describe('readiness', () => {
     expect(readinessNote(lookup, context([]), [])).toBe(' Known values: no known value yet for reservation_id.');
   });
 });
+
+test('Jev selects a complete call by ID and keeps tool resolution as a fallback', async () => {
+  let sent: unknown;
+  const client = {
+    async systemOne(request: unknown) {
+      sent = request;
+      return {
+        answers: { action: { choice: 'call:1:0', confidence: 0.9, probabilities: {} } },
+        usage: { input_tokens: 0, output_tokens: 0 },
+      };
+    },
+  } as unknown as TypeSafeClient;
+  const state = context([]);
+  const decision = await jev({ client }).control({
+    ...state,
+    availableTools: [{
+      name: 'lookup', description: 'Read a reservation.', risk: 'read', required: ['id'],
+      candidates: [{ id: 'call:1:0', input: { id: 'R1' }, description: 'User reservation', sources: ['c1'] }],
+    }],
+  });
+  expect(decision.action).toEqual({ type: 'tool', tool: 'lookup', candidateId: 'call:1:0' });
+  const text = JSON.stringify(sent);
+  expect(text).toContain('call:1:0');
+  expect(text).toContain('R1');
+  expect(text).toContain('fallback only');
+});

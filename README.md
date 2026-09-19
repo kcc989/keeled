@@ -76,6 +76,7 @@ const editFile = agentTool({
 | Field | Behavior |
 | --- | --- |
 | `available(context)` | Excludes the tool from selection when false. |
+| `candidates(context)` | Optional complete read-call inputs, each with a description and source references. Jev can select one without generating arguments. |
 | `resolveInput(context)` | Produces the typed input. Without it, the runtime generates input from the schema. |
 | `risk` | `read`, `write`, `destructive`, or, when unspecified, `unknown`. |
 | `repeat` | `allow` (default) runs every call. `reuse` declares that a result stays valid until a state-changing call succeeds, so an identical repeat before then is declined. `poll` exempts repetition from progress checks for `pollTimeoutMs` (default 60 seconds). Never use `reuse` for polling or data that changes outside the agent. |
@@ -93,7 +94,16 @@ agent context.
 
 ## Loop
 
-Each cycle calls `controller.control()` once. Jev selects a registered tool,
+Read tools can return `{ input, description, sources }` entries from `candidates(context)`.
+Build these from explicit relationships in observed records, preserving related arguments
+such as flight number and departure date. The runtime validates and stores a snapshot
+before each decision. Jev returns a candidate ID; the runtime executes its stored input
+through the normal policy and authorization checks. IDs from older snapshots in the current turn are rejected.
+Tools remain selectable through ordinary input resolution when no ready call fits.
+Candidate providers own freshness and repeat filtering. Only complete calls are offered;
+missing arguments still use the normal resolver. The `call:` tool-name prefix is reserved.
+
+Each cycle calls `controller.control()` once. Jev selects a ready call, a registered tool,
 `respond:completed`, `respond:needs_input`, or `respond:blocked`.
 A reply selection ends the loop and generates one response.
 

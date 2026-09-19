@@ -49,6 +49,20 @@ Tool input and the final response are generated with the whole conversation in v
 (`resolveInput` and `respond` in `src/tools.ts`), because τ³ conversations span several
 turns. The bridge also supplies the benchmark tool catalog and risk-specific argument models.
 
+## Ready read calls
+
+The bridge builds complete candidates for `get_reservation_details`, `get_user_details`,
+and `get_flight_status` using explicit airline result mappings. A user result supplies its
+reservation IDs; a reservation supplies its owner and paired flight/date records; flight
+searches supply their returned flights. Connecting legs retain their own departure dates.
+The search date is only a fallback for records without a date.
+
+Each decision rebuilds the ready set from persisted tool history. Successful reads with
+the same input are omitted within the current user turn. A successful mutation or an
+unclassified tool invalidates earlier source records. These are conservative candidate
+rules; ordinary tool selection and argument resolution remain available. Write calls
+continue to use the existing resolver and authorization flow.
+
 ## Endpoints
 
 | Method | Path | Body | Returns |
@@ -115,3 +129,37 @@ with repeated reservation lookups and no booking. Structured model calls were 33
 350, so removing planning did not eliminate argument-resolution loops. The production
 source in this PR matches the tested simplified loop. Raw experiment files are excluded
 from the PR; the runner above remains available for future screens.
+
+## Ready-call screen
+
+The read-call candidate experiment used the same tasks 0–9 and settings as the simplified
+loop screen above. Only the updated code was run; the baseline is the saved
+`keeled_codex_simple_single_20260919/results.json` data.
+
+| Version | Successes | Mean seconds/task | Structured generation calls |
+| --- | ---: | ---: | ---: |
+| Saved simplified loop | 8/10 | 62.2 | 350 |
+| Ready read calls | 9/10 | 33.0 | 36 |
+
+Jev selected 34 stored calls: 29 reservation lookups, one user lookup, and four flight-status
+checks. Task 8 now passed; task 7 still failed the upgrade/cancellation flow and cost total.
+Both screens had zero simulation errors or timeouts. This is one trial per task, so it does
+not establish a general accuracy or latency improvement. Generation counts include more
+than argument filling; changed trajectories also contribute to the reduction.
+
+## Full 50-task ready-call run
+
+With the same candidate code and settings, all 50 airline tasks were run once:
+**34/50 passed (68%)**, with 10 ordinary failures, five empty-message infrastructure
+errors, and one timeout. Tasks 0–9 again passed 9/10; tasks 10–49 passed 25/40.
+Jev selected 150 stored calls across the saved trajectories.
+
+The empty-message errors occurred on tasks 16, 21, 24, 25, and 35. An offline reproduction
+shows that a `TimeoutError` can be treated as cancellation and return empty text, which the
+bridge forwards and the benchmark rejects. Lost error trajectories prevent confirming
+that cause for every live failure. Task 23 separately timed out.
+
+The older saved full run (`keeled_airline_50_v2`) scored 36/50, but does not record its agent
+model or exact agent source, so it is not a matched baseline. The full result does not yet
+establish a general accuracy gain. Error rows also lose duration and usage data, preventing
+a clean total-latency or cost comparison. No runtime changes were made during this run.

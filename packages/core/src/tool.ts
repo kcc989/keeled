@@ -55,6 +55,16 @@ export type AgentAvailability = (context: AgentContext) => boolean | PromiseLike
  */
 export type RepeatPolicy = 'allow' | 'reuse' | 'poll';
 
+/** A complete, evidence-backed input offered for controller selection. */
+export interface CallCandidate<INPUT = unknown> {
+  input: INPUT;
+  description: string;
+  sources: readonly string[];
+}
+
+export type CandidateProvider<INPUT = unknown> =
+  (context: AgentContext) => readonly CallCandidate<INPUT>[] | PromiseLike<readonly CallCandidate<INPUT>[]>;
+
 export interface AgentToolSpec<SCHEMA extends FlexibleSchema<any>, OUTPUT> {
   description: string;
   inputSchema: SCHEMA;
@@ -66,6 +76,8 @@ export interface AgentToolSpec<SCHEMA extends FlexibleSchema<any>, OUTPUT> {
   pollTimeoutMs?: number;
   model?: LanguageModel;
   available?: AgentAvailability;
+  /** Optional ready-call builder. Only read tools may offer candidates. */
+  candidates?: CandidateProvider<InferSchema<SCHEMA>>;
   resolveInput?: (context: AgentContext) => InferSchema<SCHEMA> | PromiseLike<InferSchema<SCHEMA>>;
   execute: (
     input: InferSchema<SCHEMA>,
@@ -80,6 +92,7 @@ export interface AgentToolExtensions<INPUT, OUTPUT> {
   readonly pollTimeoutMs?: number;
   readonly model?: LanguageModel;
   readonly available?: AgentAvailability;
+  readonly candidates?: CandidateProvider<INPUT>;
   readonly resolveInput?: (context: AgentContext) => INPUT | PromiseLike<INPUT>;
   readonly execute: (
     input: INPUT,
@@ -148,11 +161,12 @@ export interface RegisteredTool {
   model?: LanguageModel;
   kind: 'agent' | 'sdk';
   available?: AgentAvailability;
+  candidates?: CandidateProvider;
   resolveInput?: (context: AgentContext) => unknown | PromiseLike<unknown>;
   invoke: (input: unknown, options: AgentToolExecutionOptions) => unknown | PromiseLike<unknown>;
 }
 
-const reservedPrefixes = ['respond:'] as const;
+const reservedPrefixes = ['respond:', 'call:'] as const;
 
 export function registerTools(tools: AgentToolSet): Map<string, RegisteredTool> {
   const registry = new Map<string, RegisteredTool>();
@@ -207,6 +221,7 @@ function register(name: string, tool: AnyAgentTool | Tool<any, any, any>): Regis
       model: tool.model,
       kind: 'agent',
       available: tool.available,
+      candidates: tool.candidates,
       resolveInput: tool.resolveInput,
       invoke: (input, options) => tool.execute(input, options),
     };

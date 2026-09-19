@@ -7,6 +7,8 @@ export type { RespondAdapter, RespondContext } from './execution.ts';
 export { agentTool, agentToolBrand, isAgentTool, registerTools } from './tool.ts';
 export type {
   ActionIntent,
+  CallCandidate,
+  CandidateProvider,
   AgentContext,
   AgentTool,
   AgentToolExecutionOptions,

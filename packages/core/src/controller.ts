@@ -13,6 +13,8 @@ export interface AvailableTool {
   risk: Risk;
   /** Names of the input's required top-level parameters, so a controller can judge readiness. */
   required: string[];
+  /** Ready calls in the current decision snapshot; the runtime owns their inputs. */
+  candidates?: readonly { id: string; input: unknown; description: string; sources: readonly string[] }[];
 }
 
 export interface BudgetView {
@@ -39,6 +41,7 @@ export type NextAction<Name extends string = string> =
   | {
       type: 'tool';
       tool: Name;
+      candidateId?: string;
     }
   | { type: 'respond'; outcome: 'completed' | 'needs_input' | 'blocked' };
 

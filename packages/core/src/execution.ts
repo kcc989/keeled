@@ -184,6 +184,9 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
   readonly #originalMessages: AgentMessage[];
   /** Refusals this turn, keyed by call, with the tool evidence they were made against. */
   readonly #refusals = new Map<string, Refusal>();
+  // Rebuilt before each decision: IDs cannot address stale or unavailable calls.
+  readonly #candidates = new Map<string, { tool: string; input: unknown }>();
+  #candidateVersion = 0;
   #stopReason: StopReason = 'limit';
 
   constructor(
@@ -351,7 +354,17 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
 
     let input: unknown;
     try {
-      input = 'preparedInput' in callOptions ? callOptions.preparedInput : await this.#resolveInput(tool, context);
+      if ('preparedInput' in callOptions) {
+        input = callOptions.preparedInput;
+      } else if (action.candidateId !== undefined) {
+        const candidate = this.#candidates.get(action.candidateId);
+        if (candidate === undefined || candidate.tool !== tool.name || tool.risk !== 'read') {
+          throw new Error('The selected call candidate is stale or does not belong to this read tool.');
+        }
+        input = structuredClone(candidate.input);
+      } else {
+        input = await this.#resolveInput(tool, context);
+      }
     } catch (error) {
       if (this.#turn.isAborted() || isAbortError(error)) throw error;
       if (error instanceof MissingInformation) {
@@ -668,6 +681,8 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
   async #availableTools(): Promise<AvailableTool[]> {
     const context = this.#agentContext(undefined);
     const tools: AvailableTool[] = [];
+    this.#candidates.clear();
+    this.#candidateVersion += 1;
     // A tool whose call awaits the user's confirmation cannot proceed this turn; asking the
     // user can. Other tools stay available for work that does not depend on it.
     const awaiting = new Set(
@@ -676,11 +691,27 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     for (const tool of this.#definition.registry.values()) {
       if (awaiting.has(tool.name)) continue;
       if (tool.available !== undefined && !(await tool.available(context))) continue;
+      const candidates: NonNullable<AvailableTool['candidates']>[number][] = [];
+      if (tool.risk === 'read' && tool.candidates !== undefined) {
+        const seen = new Set<string>();
+        for (const candidate of await tool.candidates(context)) {
+          const validated = await safeValidateTypes({ value: candidate.input, schema: tool.inputSchema });
+          if (!validated.success || candidate.sources.length === 0) continue;
+          const input = structuredClone(validated.value);
+          const key = JSON.stringify(input);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const id = `call:${this.#candidateVersion}:${this.#candidates.size}`;
+          this.#candidates.set(id, { tool: tool.name, input });
+          candidates.push({ ...candidate, input: structuredClone(input), id });
+        }
+      }
       tools.push({
         name: tool.name,
         description: tool.description,
         risk: tool.risk,
         required: await requiredParameters(tool),
+        ...(candidates.length === 0 ? {} : { candidates }),
       });
     }
     return tools;
