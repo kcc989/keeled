@@ -1,6 +1,6 @@
 # Microbenchmark case catalog
 
-50 synthetic cases across 14 domains: 15 simple, 20 intermediate, 15 complex.
+58 synthetic cases across 18 domains: 15 simple, 20 intermediate, 23 complex.
 Expected calls are grader-only; zero means the resolver must decline for missing evidence.
 Candidate coverage may use a separate expected set for ambiguous or scoped requests.
 
@@ -56,3 +56,11 @@ Candidate coverage may use a separate expected set for ambiguous or scoped reque
 | energy-sensor-pairs | energy | intermediate | Preserve sensor and channel pairs in nested arrays. | 2 call(s) |
 | energy-explicit-page | energy | complex | Use paging metadata to construct the next request without guessing. | 1 call(s) |
 | energy-empty-list | energy | simple | An empty collection supplies no IDs to inspect. | Decline |
+| semantic-trip-flight | aviation | complex | Map a domain synonym while rejecting a nearby transport distractor. | 2 call(s) |
+| semantic-dispatch-shipment | fulfillment | complex | Relate operational vocabulary without matching identifier names. | 2 call(s) |
+| semantic-roster-employee | workplace | complex | Select the intended people collection from semantically related distractors. | 2 call(s) |
+| semantic-case-ticket | support | complex | Resolve business terminology rather than a spelling relationship. | 2 call(s) |
+| semantic-locator-reservation | travel | complex | Use an industry synonym with no shared target-field token. | 2 call(s) |
+| semantic-monitor-sensor | energy | complex | Distinguish semantically related device roles from a distractor collection. | 2 call(s) |
+| semantic-reel-asset | media | complex | Interpret a content-system concept instead of matching field morphology. | 2 call(s) |
+| semantic-stock-unit-sku | inventory | complex | Map an explained abbreviation while ignoring another valid identifier family. | 2 call(s) |

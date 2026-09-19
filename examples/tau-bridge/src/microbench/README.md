@@ -1,8 +1,9 @@
 # Argument and field-matching microbench
 
-Fifty synthetic cases exercise existing production candidate and resolver code, without
-Jev selection, task tracking, response generation, or a simulated user. Fixtures cover 14 domains and three difficulty levels: 15 simple, 20 intermediate,
-and 15 complex cases. No benchmark domain mappings are added.
+Fifty-eight synthetic cases exercise existing production candidate and resolver code,
+without Jev selection, task tracking, response generation, or a simulated user. Fixtures
+cover 18 domains and three difficulty levels: 15 simple, 20 intermediate, and 23 complex
+cases. No benchmark domain mappings are added.
 
 ```sh
 # Offline candidate coverage; no credentials or model calls.
@@ -38,6 +39,9 @@ The grader validates root schema references independently of the runtime.
 Cases include exact fields, collection IDs, different domain vocabulary, a described alias,
 ambiguous IDs, an incomplete record beside a complete one, nested records, root `$ref`,
 a required summary behind `$ref`, and a missing required ID.
+Eight semantic-alias cases use unrelated source and target names plus distractor
+collections. They are intended to expose lexical matching and require relationship
+understanding; expected mappings remain grader-only.
 
 Results contain actual and expected arguments, blockers, purpose-tagged traces, usage,
 latency, trial number, model/provider settings, and Git commit/dirty state. They are saved
@@ -50,7 +54,7 @@ these IDs or fixtures. General fixes should transfer across schemas and renamed 
 
 ## Expanded coverage
 
-See the [50-case catalog](CATALOG.md) for domains, difficulty, and each failure mechanism.
+See the [58-case catalog](CATALOG.md) for domains, difficulty, and each failure mechanism.
 Domains include documents, inventory, logistics, support, general records, library,
 retail, DevOps, calendar, accounting, education, clinic administration, media, and energy.
 The clinic cases concern record identifiers only, not medical decisions.
@@ -59,7 +63,8 @@ Simple cases establish copying, numeric typing, booleans, null rejection, Unicod
 and user-provided arguments. Intermediate cases cover enumeration, aliasing, optional
 fields, batching, missing units, enums, duplicate IDs, and ambiguous requests. Complex
 cases cover explicit joins, parent scope, nested references, allOf/oneOf schemas,
-conflicting observations, continuation cursors, and incomplete records.
+conflicting observations, continuation cursors, incomplete records, and semantic
+relationships that cannot be recovered from field-name overlap.
 
 The report includes separate domain and difficulty totals for each layer. These are
 single snapshots with scripted tool selection, not full planning, authentication, or
