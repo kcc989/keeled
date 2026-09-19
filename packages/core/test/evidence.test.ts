@@ -13,17 +13,17 @@ function toolMessage(id: string, tool: string, input: unknown, output: unknown):
   };
 }
 
-const leg = (flight: string, business: number | undefined) => ({
-  flight_number: flight,
-  prices: business === undefined ? { economy: 100 } : { economy: 100, business },
+const component = (item: string, premium: number | undefined) => ({
+  item_number: item,
+  prices: premium === undefined ? { standard: 100 } : { standard: 100, premium },
 });
 
-// Connecting itineraries: each record is a pair of legs.
-const itineraries = [
-  [leg('HAT1', 500), leg('HAT2', 400)],
-  [leg('HAT3', 300), leg('HAT4', 250)],
-  [leg('HAT5', undefined), leg('HAT6', 100)],
-  [leg('HAT7', 200), leg('HAT8', 450)],
+// Product bundles: each record is a pair of components.
+const bundles = [
+  [component('SKU1', 500), component('SKU2', 400)],
+  [component('SKU3', 300), component('SKU4', 250)],
+  [component('SKU5', undefined), component('SKU6', 100)],
+  [component('SKU7', 200), component('SKU8', 450)],
 ];
 
 function run(input: Parameters<ReturnType<typeof evidenceTool>['execute']>[0], conversation: AgentMessage[]) {
@@ -46,10 +46,10 @@ describe('call history', () => {
 });
 
 describe('evidence tool', () => {
-  const conversation = [toolMessage('call_7', 'search_onestop_flight', { origin: 'JFK' }, itineraries)];
+  const conversation = [toolMessage('call_7', 'search_bundles', { workspace: 'HQ1' }, bundles)];
 
-  test('sorts the full result, summing across legs, with missing keys last', async () => {
-    const page = await run({ ref: 'call_7', sortBy: '[].prices.business' }, conversation);
+  test('sorts the full result, summing across components, with missing keys last', async () => {
+    const page = await run({ ref: 'call_7', sortBy: '[].prices.premium' }, conversation);
     expect(page.records.map(entry => [entry.index, entry.sortValue])).toEqual([
       [1, 550],
       [3, 650],
@@ -57,13 +57,13 @@ describe('evidence tool', () => {
       [2, null],
     ]);
     // Records come back whole.
-    expect(page.records[0]?.record).toEqual(itineraries[1]);
+    expect(page.records[0]?.record).toEqual(bundles[1]);
   });
 
   test('pages complete records', async () => {
     const second = await run({ ref: 'call_7', page: 2, pageSize: 3 }, conversation);
     expect(second).toMatchObject({ total: 4, page: 2, pages: 2, pageSize: 3 });
-    expect(second.records).toEqual([{ index: 3, record: itineraries[3] }]);
+    expect(second.records).toEqual([{ index: 3, record: bundles[3] }]);
   });
 
   test('an unknown reference is an error, not an empty page', async () => {

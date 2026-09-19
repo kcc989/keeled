@@ -305,3 +305,11 @@ before storage cannot be recovered.
 `policy.turnTimeoutMs` bounds the whole turn, including callbacks that ignore cancellation.
 Such callbacks may continue outside the loop; uncertain writes remain quarantined.
 Timeouts are errors, not user cancellation. Every terminal response has nonempty text.
+
+
+`schemaReadCandidates(tool, catalog)` provides generic ready reads from observed records.
+It copies exact schema property names from one object and validates the complete input;
+it does not infer aliases or relationships between records. The bridge uses this core
+provider for every read tool without domain-specific tool mappings. Unsupported schemas
+or incomplete records use normal argument resolution. Matching fields propose a call;
+they do not prove that the call is appropriate or authorized.

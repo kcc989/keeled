@@ -1,7 +1,7 @@
 import { jsonSchema, type LanguageModel } from 'ai';
-import { readCandidates } from './candidates.ts';
 import {
   MissingInformation,
+  schemaReadCandidates,
   agentTool,
   callHistory,
   presentResult,
@@ -56,7 +56,7 @@ export function bridgeTools(
       inputSchema: schema,
       risk: spec.risk ?? 'unknown',
       repeat: spec.repeat ?? 'allow',
-      candidates: readCandidates(spec, specs),
+      candidates: schemaReadCandidates(spec, specs),
       resolveInput: async context => {
         const model = spec.risk === 'read' ? argumentsModel : (writeArgumentsModel ?? argumentsModel);
         return resolveInput(spec, context, model);

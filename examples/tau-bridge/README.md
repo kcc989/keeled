@@ -39,8 +39,8 @@ stores them in `AssistantMessage.raw_data.keeled.decisions`, so they appear in t
 trajectory.
 
 The session also registers Keeled's `evidence` tool. It runs locally over stored results
-and is never sent to τ³, so it can page or rank a large result, such as every connecting
-flight by total business fare, without another environment call.
+and is never sent to τ³, so it can page or rank a large result, such as every product bundle
+by total component price, without another environment call.
 
 Tool input is generated with a schema that lets the model answer `missing` instead of
 arguments; that becomes a `missing_evidence` blocker rather than invented values.
@@ -51,17 +51,13 @@ turns. The bridge also supplies the benchmark tool catalog and risk-specific arg
 
 ## Ready read calls
 
-The bridge builds complete candidates for `get_reservation_details`, `get_user_details`,
-and `get_flight_status` using explicit airline result mappings. A user result supplies its
-reservation IDs; a reservation supplies its owner and paired flight/date records; flight
-searches supply their returned flights. Connecting legs retain their own departure dates.
-The search date is only a fallback for records without a date.
-
-Each decision rebuilds the ready set from persisted tool history. Successful reads with
-the same input are omitted within the current user turn. A successful mutation or an
-unclassified tool invalidates earlier source records. These are conservative candidate
-rules; ordinary tool selection and argument resolution remain available. Write calls
-continue to use the existing resolver and authorization flow.
+The bridge uses the core `schemaReadCandidates` provider for all read tools. It projects
+exactly matching property names from a single observed object and validates the entire
+input schema. It never joins separate records, inherits parent fields, translates aliases,
+or interprets tool names. Incomplete and ambiguous relationships use normal input resolution.
+Candidates carry source references. Mutations and unknown-risk calls invalidate earlier
+sources; successful identical reads are omitted in the current turn. Candidate enumeration
+is bounded to 100 calls and depth 20; ordinary input resolution remains available.
 
 ## Endpoints
 
@@ -79,13 +75,12 @@ An event is `{ type: 'tool_call', id, name, arguments, decisions }` or
 
 ```sh
 bun run tau3 mock
-bun run tau3 airline --num-tasks 5
-bun run tau3 airline --task-ids 0 1 2 --max-concurrency 1
+bun run tau3 <domain> --num-tasks 5
+bun run tau3 <domain> --task-ids 0 1 2 --max-concurrency 1
 ```
 
 `tau3` starts the bridge, runs `tau2 run --domain <domain> --agent keeled` in the τ³-bench
-checkout, and stops the bridge. Any other `tau2 run` option passes through. `mock` and
-`airline` are tested; other domains run with a warning. The default is **one trial per task**;
+checkout, and stops the bridge. Any other `tau2 run` option passes through. The domain is passed through without special handling. The default is **one trial per task**;
 keep screening runs at one trial until a promising change warrants a larger evaluation.
 
 | Variable | Where | Purpose |
@@ -113,64 +108,18 @@ Structured tool input is requested with `strictJsonSchema: false`, because τ³ 
 use optional fields and open objects (`$defs`, `anyOf` with `additionalProperties`) that
 strict mode rejects.
 
-## Simplified-loop screen
+## Historical measurements
 
-Airline tasks 0–9, one trial per task, seed 300, concurrency 3, 300-second timeout,
-zero retries. Agent: DeepSeek v4.1 Flash via Together/Modal; user: GPT-4.1.
-
-| Version | Successes | Mean seconds/task |
-| --- | ---: | ---: |
-| PR #5 (`f31c283`) | 9/10 | 121.4 |
-| Simplified loop (`4527d35`) | 8/10 | 62.2 |
-
-Both runs had zero errors and timeouts. This single screen shows a speed/accuracy tradeoff,
-not an established improvement. Both failed task 7; the simplified loop also failed task 8
-with repeated reservation lookups and no booking. Structured model calls were 335 versus
-350, so removing planning did not eliminate argument-resolution loops. The production
-source in this PR matches the tested simplified loop. Raw experiment files are excluded
-from the PR; the runner above remains available for future screens.
-
-## Ready-call screen
-
-The read-call candidate experiment used the same tasks 0–9 and settings as the simplified
-loop screen above. Only the updated code was run; the baseline is the saved
-`keeled_codex_simple_single_20260919/results.json` data.
-
-| Version | Successes | Mean seconds/task | Structured generation calls |
-| --- | ---: | ---: | ---: |
-| Saved simplified loop | 8/10 | 62.2 | 350 |
-| Ready read calls | 9/10 | 33.0 | 36 |
-
-Jev selected 34 stored calls: 29 reservation lookups, one user lookup, and four flight-status
-checks. Task 8 now passed; task 7 still failed the upgrade/cancellation flow and cost total.
-Both screens had zero simulation errors or timeouts. This is one trial per task, so it does
-not establish a general accuracy or latency improvement. Generation counts include more
-than argument filling; changed trajectories also contribute to the reduction.
-
-## Full 50-task ready-call run
-
-With the same candidate code and settings, all 50 airline tasks were run once:
-**34/50 passed (68%)**, with 10 ordinary failures, five empty-message infrastructure
-errors, and one timeout. Tasks 0–9 again passed 9/10; tasks 10–49 passed 25/40.
-Jev selected 150 stored calls across the saved trajectories.
-
-The empty-message errors occurred on tasks 16, 21, 24, 25, and 35. An offline reproduction
-shows that a `TimeoutError` can be treated as cancellation and return empty text, which the
-bridge forwards and the benchmark rejects. Lost error trajectories prevent confirming
-that cause for every live failure. Task 23 separately timed out.
-
-The older saved full run (`keeled_airline_50_v2`) scored 36/50, but does not record its agent
-model or exact agent source, so it is not a matched baseline. The full result does not yet
-establish a general accuracy gain. Error rows also lose duration and usage data, preventing
-a clean total-latency or cost comparison. No runtime changes were made during this run.
-
+The earlier candidate experiment used a domain-specific adapter. That adapter has been
+removed. Its saved results do not establish the performance of the general framework or
+the new schema-based candidate provider. Raw historical run artifacts remain unchanged.
+No new benchmark was run for this replacement.
 
 ## Generic harness changes after the snapshot
 
 The snapshot results above predate the current changes and do not measure them.
 Sessions now use the reusable task tracker and evidence calculation tool. Tests can disable
-the tracker with `trackTasks: false`. No new airline policy, pricing, or ownership rules
-were added to the framework.
+the tracker with `trackTasks: false`. The framework has no domain-specific policy, pricing, or ownership rules.
 
 `Session` accepts a trusted `access` adapter from its host. The stock loopback HTTP server
 does not authenticate benchmark users or supply this adapter, so mutations now fail

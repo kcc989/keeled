@@ -135,7 +135,7 @@ describe('call history', () => {
 });
 
 describe('what Jev is shown', () => {
-  // The shape that broke airline: the field the next step needs comes last.
+  // The shape that broke record projection: the field the next step needs comes last.
   const userDetails = {
     user_id: 'raj_sanchez_7340',
     name: { first_name: 'Raj', last_name: 'Sanchez' },
@@ -147,9 +147,9 @@ describe('what Jev is shown', () => {
       gift_card_2: { source: 'gift_card', amount: 150, id: 'gift_card_2' },
       certificate_3: { source: 'certificate', amount: 250, id: 'certificate_3' },
     },
-    saved_passengers: [{ first_name: 'Maria', last_name: 'Sanchez', dob: '1970-01-01' }],
+    saved_contacts: [{ first_name: 'Maria', last_name: 'Sanchez', dob: '1970-01-01' }],
     membership: 'silver',
-    reservations: ['MZDDS4', '60RX9E', 'S5IK51', 'OUEA45', 'Q69X3R'],
+    documents: ['MZDDS4', '60RX9E', 'S5IK51', 'OUEA45', 'Q69X3R'],
   };
 
   test('a full result reaches Jev, including fields at the end', () => {
@@ -170,23 +170,23 @@ describe('what Jev is shown', () => {
   });
 
   test('an oversized list is paged as complete records with its omission stated', () => {
-    const flight = (n: number) => ({
-      flight_number: `HAT${n}`,
-      origin: 'JFK',
-      destination: 'SFO',
-      available_seats: { basic_economy: 3, economy: 9, business: 2 },
-      prices: { basic_economy: 90 + n, economy: 180 + n, business: 400 + n },
+    const item = (n: number) => ({
+      item_number: `SKU${n}`,
+      workspace: 'HQ1',
+      folder: 'WH2',
+      available_units: { basic_standard: 3, standard: 9, premium: 2 },
+      prices: { basic_standard: 90 + n, standard: 180 + n, premium: 400 + n },
     });
-    const flights = Array.from({ length: 40 }, (_, n) => flight(n));
-    const shown = presentResult(flights, 'call_9', 2_000) as {
+    const items = Array.from({ length: 40 }, (_, n) => item(n));
+    const shown = presentResult(items, 'call_9', 2_000) as {
       total: number;
-      records: typeof flights;
+      records: typeof items;
       omitted: { count: number; retrieve: string };
     };
     expect(shown.total).toBe(40);
     expect(shown.records.length).toBeGreaterThan(0);
     // Every shown record is complete, in its original order.
-    expect(shown.records).toEqual(flights.slice(0, shown.records.length));
+    expect(shown.records).toEqual(items.slice(0, shown.records.length));
     expect(shown.omitted.count).toBe(40 - shown.records.length);
     expect(shown.omitted.retrieve).toBe(`evidence({"ref":"call_9","page":2,"pageSize":${shown.records.length}})`);
   });
@@ -211,20 +211,20 @@ describe('authorization', () => {
     } as unknown as TypeSafeClient;
 
     const answer = await jev({ client }).authorize!(context([]), {
-      tool: 'cancel_reservation',
-      description: 'Cancel the whole reservation.',
+      tool: 'cancel_document',
+      description: 'Cancel the whole document.',
       risk: 'write',
-      input: { reservation_id: 'Q69X3R' },
+      input: { document_id: 'Q69X3R' },
       facts: {},
       effects: [],
     });
 
     expect(Object.keys(requests[0]!.questions).sort()).toEqual(['confirmed', 'needs_verification', 'permitted']);
     expect(requests[0]!.state['pending_action']).toEqual({
-      tool: 'cancel_reservation',
-      description: 'Cancel the whole reservation.',
+      tool: 'cancel_document',
+      description: 'Cancel the whole document.',
       risk: 'write',
-      input: { reservation_id: 'Q69X3R' },
+      input: { document_id: 'Q69X3R' },
       verified_facts: {},
       effects: [],
     });
@@ -256,20 +256,20 @@ describe('authorization', () => {
 });
 
 describe('readiness', () => {
-  const lookup = { name: 'get_reservation_details', description: 'Look up.', risk: 'read' as const, required: ['reservation_id'] };
-  const user = { user_id: 'u1', reservations: ['M05KNL', 'UHDAHF'] };
+  const lookup = { name: 'get_document_details', description: 'Look up.', risk: 'read' as const, required: ['document_id'] };
+  const user = { user_id: 'u1', documents: ['M05KNL', 'UHDAHF'] };
 
   test('known values are listed, with those already used this turn marked', () => {
     const history = callHistory(
-      context([call('get_user_details', { user_id: 'u1' }, user, 'c1'), call('get_reservation_details', { reservation_id: 'M05KNL' }, { reservation_id: 'M05KNL', origin: 'ATL' }, 'c2')]),
+      context([call('get_user_details', { user_id: 'u1' }, user, 'c1'), call('get_document_details', { document_id: 'M05KNL' }, { document_id: 'M05KNL', workspace: 'OPS' }, 'c2')]),
     );
     const note = readinessNote(lookup, context([]), history);
-    expect(note).toContain('reservation_id: M05KNL (origin=ATL; already used this turn)');
-    expect(note).toContain('UHDAHF (one of reservations returned by get_user_details)');
+    expect(note).toContain('document_id: M05KNL (workspace=OPS; already used this turn)');
+    expect(note).toContain('UHDAHF (one of documents returned by get_user_details)');
   });
 
   test('a parameter with no known value says so', () => {
-    expect(readinessNote(lookup, context([]), [])).toBe(' Known values: no known value yet for reservation_id.');
+    expect(readinessNote(lookup, context([]), [])).toBe(' Known values: no known value yet for document_id.');
   });
 });
 
@@ -288,8 +288,8 @@ test('Jev selects a complete call by ID and keeps tool resolution as a fallback'
   const decision = await jev({ client }).control({
     ...state,
     availableTools: [{
-      name: 'lookup', description: 'Read a reservation.', risk: 'read', required: ['id'],
-      candidates: [{ id: 'call:1:0', input: { id: 'R1' }, description: 'User reservation', sources: ['c1'] }],
+      name: 'lookup', description: 'Read a document.', risk: 'read', required: ['id'],
+      candidates: [{ id: 'call:1:0', input: { id: 'R1' }, description: 'User document', sources: ['c1'] }],
     }],
   });
   expect(decision.action).toEqual({ type: 'tool', tool: 'lookup', candidateId: 'call:1:0' });

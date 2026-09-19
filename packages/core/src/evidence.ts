@@ -15,7 +15,7 @@ const evidenceInputSchema = z.object({
     .optional()
     .describe(
       'Dot path to a number in each record to sort the full list by. A "[]" segment sums the value over ' +
-        'every element of a list, such as each leg of a connecting itinerary: "[].prices.business".',
+        'every element of a list, such as each component of a product bundle: "[].prices.premium".',
     ),
   order: z.enum(['asc', 'desc']).optional(),
 });

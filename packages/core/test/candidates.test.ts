@@ -10,7 +10,7 @@ test('a ready call uses stored input, survives controller mutation, and skips re
   let resolutions = 0;
   let decisions = 0;
   const agent = createAgent({
-    instructions: 'Inspect the reservation.', model: stubModel({ text: 'Done.' }),
+    instructions: 'Inspect the document.', model: stubModel({ text: 'Done.' }),
     controller: {
       name: 'candidate-test',
       async control(context) {
@@ -25,7 +25,7 @@ test('a ready call uses stored input, survives controller mutation, and skips re
     tools: { lookup: agentTool({
       description: 'Lookup', risk: 'read', inputSchema: z.object({ id: z.string() }),
       candidates: () => [
-        { input: { id: 'R1' }, description: 'Reservation 1', sources: ['c1'] },
+        { input: { id: 'R1' }, description: 'Document 1', sources: ['c1'] },
         { input: { id: 'R1' }, description: 'Duplicate', sources: ['c1'] },
         { input: { id: 123 as unknown as string }, description: 'Invalid', sources: ['c1'] },
       ],

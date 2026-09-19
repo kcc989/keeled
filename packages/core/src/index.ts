@@ -101,3 +101,5 @@ export { calculateDecimals } from './arithmetic.ts';
 export { evidenceCalculationTool } from './calculate.ts';
 
 export { modelTaskTracker } from './task-tracker.ts';
+
+export { schemaReadCandidates, type CandidateTool } from './candidates.ts';

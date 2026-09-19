@@ -136,7 +136,7 @@ describe('tau bridge session', () => {
   });
 
   test('prompts see a long tool result in full, including its last field', async () => {
-    const long = { user_id: 'user_1', padding: 'p'.repeat(900), reservations: ['MZDDS4', 'Q69X3R'] };
+    const long = { user_id: 'user_1', padding: 'p'.repeat(900), documents: ['MZDDS4', 'Q69X3R'] };
     const controller = scriptedController({
       decisions: [
         { type: 'tool', tool: 'get_users' },
@@ -151,7 +151,7 @@ describe('tau bridge session', () => {
       },
     });
     const s = new Session({ trackTasks: false, access: { principal: { subject: 'fixture-owner' }, authorize: () => ({ allowed: true, reason: 'Test resource' }) }, instructions: policy, tools, controller, model });
-    const call = await s.sendUser('Which reservations do I have?');
+    const call = await s.sendUser('Which documents do I have?');
     const final = await s.sendToolResult({ id: call.type === 'tool_call' ? call.id : '', content: JSON.stringify(long) });
     expect(final).toMatchObject({ type: 'message', text: 'Done.' });
     expect(prompts.at(-1)).toContain('Q69X3R');

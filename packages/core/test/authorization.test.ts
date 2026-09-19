@@ -10,17 +10,17 @@ import type { AgentMessage } from '../src/types.ts';
 function tools() {
   const executed: unknown[] = [];
   const cancel = agentTool({
-    description: 'Cancel a reservation.',
-    inputSchema: z.object({ reservation_id: z.string() }),
+    description: 'Cancel a document.',
+    inputSchema: z.object({ document_id: z.string() }),
     risk: 'write',
-    resolveInput: () => ({ reservation_id: 'Q69X3R' }),
+    resolveInput: () => ({ document_id: 'Q69X3R' }),
     execute: input => {
       executed.push(input);
       return { status: 'cancelled' };
     },
   });
   const lookup = agentTool({
-    description: 'Look up a reservation.',
+    description: 'Look up a document.',
     inputSchema: z.object({}),
     risk: 'read',
     resolveInput: () => ({}),
@@ -43,7 +43,7 @@ async function run(
   const { executed, tools: registered } = tools();
   const asked: PendingAction[] = [];
   const agent = createAgent({
-    instructions: 'Cancel only within 24 hours of booking. Confirm writes with the user first.',
+    instructions: 'Cancel only within 24 hours of creation. Confirm writes with the user first.',
     controller: scriptedController({
       decisions: [
         { type: 'tool', tool: 'lookup' },
@@ -65,8 +65,8 @@ async function run(
 describe('authorization before a write', () => {
   test('a permitted, confirmed write runs and is recorded as authorized', async () => {
     const { result, executed, asked } = await run(() => ({ permitted: true, confirmed: true }));
-    expect(executed).toEqual([{ reservation_id: 'Q69X3R' }]);
-    expect(asked.map(action => [action.tool, action.input])).toEqual([['cancel', { reservation_id: 'Q69X3R' }]]);
+    expect(executed).toEqual([{ document_id: 'Q69X3R' }]);
+    expect(asked.map(action => [action.tool, action.input])).toEqual([['cancel', { document_id: 'Q69X3R' }]]);
     expect(transitions(result.messages).find(t => t.kind === 'authorized')?.detail).toContain('(controller)');
   });
 
@@ -80,24 +80,24 @@ describe('authorization before a write', () => {
   test('when verification is needed, the model decides and can refuse', async () => {
     const { result, executed } = await run(
       () => ({ permitted: true, needsVerification: true, confirmed: true }),
-      { permitted: false, reason: 'It was booked more than 24 hours ago.' },
+      { permitted: false, reason: 'It was created more than 24 hours ago.' },
     );
     expect(executed).toEqual([]);
     expect(result.state.blockers.at(-1)).toMatchObject({
       kind: 'policy_denied',
-      reason: 'Not permitted: cancel {"reservation_id":"Q69X3R"}. It was booked more than 24 hours ago.',
-      input: { reservation_id: 'Q69X3R' },
+      reason: 'Not permitted: cancel {"document_id":"Q69X3R"}. It was created more than 24 hours ago.',
+      input: { document_id: 'Q69X3R' },
     });
   });
 
   test('when the controller doubts it, a model verdict of permitted lets it run', async () => {
     const { result, executed } = await run(
       () => ({ permitted: false, confirmed: true }),
-      { permitted: true, reason: 'It is a business class booking.' },
+      { permitted: true, reason: 'It is a premium class creation.' },
     );
     expect(executed).toHaveLength(1);
     expect(transitions(result.messages).find(t => t.kind === 'authorized')?.detail).toContain(
-      'verified: It is a business class booking.',
+      'verified: It is a premium class creation.',
     );
   });
 
@@ -111,7 +111,7 @@ describe('authorization before a write', () => {
         ],
       });
       const agent = createAgent({
-        instructions: 'Cancel only within 24 hours of booking.',
+        instructions: 'Cancel only within 24 hours of creation.',
         controller: {
           ...base,
           async authorize() {
@@ -198,7 +198,7 @@ describe('authorization before a write', () => {
     const { executed, tools: registered } = tools();
     let asked = 0;
     const agent = createAgent({
-      instructions: 'Cancel only within 24 hours of booking.',
+      instructions: 'Cancel only within 24 hours of creation.',
       controller: scriptedController({
         decisions: [
           { type: 'tool', tool: 'cancel' },
@@ -232,7 +232,7 @@ describe('authorization before a write', () => {
     const { tools: registered } = tools();
     let asked = 0;
     const agent = createAgent({
-      instructions: 'Cancel only within 24 hours of booking.',
+      instructions: 'Cancel only within 24 hours of creation.',
       controller: scriptedController({
         decisions: [
           { type: 'tool', tool: 'cancel' },
@@ -248,7 +248,7 @@ describe('authorization before a write', () => {
       model: stubModel({
         text: 'Reply.',
         objects: [
-          { permitted: false, reason: 'The booking time is unknown.', missing: 'the reservation creation time' },
+          { permitted: false, reason: 'The creation time is unknown.', missing: 'the document creation time' },
           { permitted: false, reason: 'Booked 29 hours ago.', missing: '' },
         ],
       }),
@@ -257,7 +257,7 @@ describe('authorization before a write', () => {
     const result = await agent.run({ messages: [userMessage('Cancel my trip.')] });
     expect(asked).toBe(2);
     expect(result.state.blockers.map(blocker => [blocker.kind, blocker.resolution])).toEqual([
-      ['missing_evidence', 'Obtain this evidence first: the reservation creation time'],
+      ['missing_evidence', 'Obtain this evidence first: the document creation time'],
       ['policy_denied', 'Do not retry this action; explain the refusal to the user or choose one the policy permits.'],
     ]);
   });
@@ -289,14 +289,14 @@ describe('exact repeats', () => {
   function counting(risk: 'read' | 'write', repeat: 'allow' | 'reuse' = 'reuse') {
     let calls = 0;
     const tool = agentTool({
-      description: 'Search flights.',
+      description: 'Search items.',
       inputSchema: z.object({ route: z.string() }),
       risk,
       repeat,
-      resolveInput: () => ({ route: 'SEA-JFK' }),
+      resolveInput: () => ({ route: 'SEA-HQ1' }),
       execute: () => {
         calls += 1;
-        return { flights: ['HAT021'] };
+        return { items: ['SKU021'] };
       },
     });
     return { tool, count: () => calls };
@@ -325,7 +325,7 @@ describe('exact repeats', () => {
   test('a reusable lookup that already returned for the same input is not run again', async () => {
     const search = counting('read');
     const agent = createAgent({
-      instructions: 'Find flights.',
+      instructions: 'Find items.',
       controller: scriptedController({
         decisions: [
           { type: 'tool', tool: 'search' },
@@ -334,10 +334,10 @@ describe('exact repeats', () => {
         ],
 
       }),
-      model: stubModel({ text: 'Here are the flights.' }),
+      model: stubModel({ text: 'Here are the items.' }),
       tools: { search: search.tool },
     });
-    const result = await agent.run({ messages: [userMessage('Flights SEA to JFK?')] });
+    const result = await agent.run({ messages: [userMessage('Items in warehouse A?')] });
     expect(search.count()).toBe(1);
     expect(result.state.blockers.at(-1)?.reason).toContain('already returned a result this turn for this exact input');
     expect(result.stopReason).toBe('completed');
@@ -347,7 +347,7 @@ describe('exact repeats', () => {
     const search = counting('read');
     const change = counting('write');
     const agent = createAgent({
-      instructions: 'Find flights.',
+      instructions: 'Find items.',
       controller: scriptedController({
         decisions: [
           { type: 'tool', tool: 'search' },
@@ -360,7 +360,7 @@ describe('exact repeats', () => {
       model: stubModel({ text: 'Done.' }),
       tools: { search: search.tool, change: change.tool },
     });
-    await agent.run({ messages: [userMessage('Change my flight.')] });
+    await agent.run({ messages: [userMessage('Change my item.')] });
     expect(search.count()).toBe(2);
   });
 });
@@ -370,12 +370,12 @@ describe('what a refusal depends on', () => {
     const executed: unknown[] = [];
     const seen: { objective?: string; evidence?: string[]; awaitingInput?: unknown }[] = [];
     const cancel = agentTool({
-      description: 'Cancel a reservation.',
-      inputSchema: z.object({ reservation_id: z.string() }),
+      description: 'Cancel a document.',
+      inputSchema: z.object({ document_id: z.string() }),
       risk: 'write',
       resolveInput: context => {
         seen.push({ ...context.action });
-        return { reservation_id: 'Q69X3R' };
+        return { document_id: 'Q69X3R' };
       },
       execute: input => {
         executed.push(input);
@@ -383,14 +383,14 @@ describe('what a refusal depends on', () => {
       },
     });
     const lookup = agentTool({
-      description: 'Look up flight status.',
+      description: 'Look up item status.',
       inputSchema: z.object({}),
       risk: 'read',
       resolveInput: () => ({}),
       execute: () => ({ status: 'on time' }),
     });
     const change = agentTool({
-      description: 'Change the reservation.',
+      description: 'Change the document.',
       inputSchema: z.object({}),
       risk: 'write',
       resolveInput: () => ({}),
@@ -403,7 +403,7 @@ describe('what a refusal depends on', () => {
     const { tools: registered } = counter();
     let asked = 0;
     const agent = createAgent({
-      instructions: 'Cancel only within 24 hours of booking.',
+      instructions: 'Cancel only within 24 hours of creation.',
       controller: scriptedController({
         decisions: [...decisions, { type: 'respond', outcome: 'blocked' }],
         authorize: action => {
@@ -440,7 +440,7 @@ describe('what a refusal depends on', () => {
     const { tools: registered } = counter();
     let asked = 0;
     const agent = createAgent({
-      instructions: 'Cancel only within 24 hours of booking.',
+      instructions: 'Cancel only within 24 hours of creation.',
       controller: scriptedController({
         decisions: [
           { type: 'tool', tool: 'cancel' },
@@ -474,12 +474,12 @@ describe('an action held for confirmation', () => {
     let turn = 1;
     let authorizations = 0;
     const cancel = agentTool({
-      description: 'Cancel a reservation.',
-      inputSchema: z.object({ reservation_id: z.string() }),
+      description: 'Cancel a document.',
+      inputSchema: z.object({ document_id: z.string() }),
       risk: 'write',
       resolveInput: context => {
         awaiting.push(context.action?.awaitingInput);
-        return (context.action?.awaitingInput as { reservation_id: string } | undefined) ?? { reservation_id: 'Q69X3R' };
+        return (context.action?.awaitingInput as { document_id: string } | undefined) ?? { document_id: 'Q69X3R' };
       },
       execute: input => {
         executed.push(input);
@@ -511,7 +511,7 @@ describe('an action held for confirmation', () => {
 
     expect(awaiting).toEqual([undefined]);
     expect(authorizations).toBe(2);
-    expect(executed).toEqual([{ reservation_id: 'Q69X3R' }]);
+    expect(executed).toEqual([{ document_id: 'Q69X3R' }]);
   });
 });
 
@@ -519,7 +519,7 @@ describe('the selected action reaches input resolution', () => {
   test('a resolver receives the selected tool and may report missing information', async () => {
     const seen: unknown[] = [];
     const search = agentTool({
-      description: 'Search flights.',
+      description: 'Search items.',
       inputSchema: z.object({ route: z.string() }),
       risk: 'read',
       resolveInput: context => {
