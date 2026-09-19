@@ -44,18 +44,3 @@ export function errorMessage(error: unknown): string {
     return String(error);
   }
 }
-
-/**
- * Thrown by an input resolver that cannot produce input because information is missing.
- * The runtime records it as missing evidence, with the description as what would resolve it,
- * instead of letting the resolver invent values.
- */
-export class MissingInformation extends HarnessError {
-  readonly missing: string;
-
-  constructor(missing: string) {
-    super(`Missing information: ${missing}`);
-    this.name = 'MissingInformation';
-    this.missing = missing;
-  }
-}

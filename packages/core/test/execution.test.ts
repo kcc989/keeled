@@ -76,8 +76,8 @@ describe('phase 1 demonstration', () => {
       part => part.type.startsWith('tool-') && (part as { state?: string }).state === 'output-error',
     );
 
-    expect(decisions).toHaveLength(9);
-    expect(plans).toHaveLength(3);
+    expect(decisions).toHaveLength(7);
+    expect(plans).toHaveLength(2);
     expect(toolErrors).toHaveLength(1);
     expect(result.state.stepStatuses).toEqual({ locate: 'done', edit: 'done', verify: 'done' });
   });
@@ -101,103 +101,8 @@ describe('phase 1 demonstration', () => {
 
     const result = await agent.run({ messages: [userMessage('Where is the helper defined?')] });
     expect(result.stopReason).toBe('completed');
-    expect(result.plan).toMatchObject({ kind: 'implicit', version: 0, steps: [{ id: 'request' }] });
+    expect(result.plan).toBeUndefined();
     expect(result.state.toolCalls).toBe(1);
-  });
-
-  test('a complex request expands the implicit plan before other work', async () => {
-    const controller = scriptedController({
-      decisions: [
-        { type: 'tool', tool: 'plan' },
-        { type: 'respond', outcome: 'needs_input' },
-      ],
-      assess: { goalMet: false },
-    });
-    const agent = createAgent({
-      instructions: 'Complete complex work from a plan.',
-      controller,
-      model,
-      tools: { plan: scriptedPlanner([firstPlan]), search: searchTool() },
-      planningTool: 'plan',
-    });
-
-    const result = await agent.run({ messages: [userMessage('Change the helper and verify it.')] });
-
-    expect(result.plan).toMatchObject({ kind: 'explicit', version: 1 });
-    expect(result.state.observations.filter(observation => observation.kind === 'tool-result').map(o => o.tool))
-      .toEqual(['plan']);
-    expect(controller.contexts).toHaveLength(2);
-  });
-
-  test('offers planning at setup and once after a tool failure, but not on every cycle', async () => {
-    const planningVisible: boolean[] = [];
-    const failing = agentTool({
-      description: 'Fail once.',
-      inputSchema: z.object({}),
-      risk: 'read',
-      resolveInput: () => ({}),
-      execute: () => {
-        throw new Error('failed route');
-      },
-    });
-    const observe = (action: { type: 'tool'; tool: string } | { type: 'respond'; outcome: 'needs_input' }) =>
-      (context: ControllerContext) => {
-        planningVisible.push(context.availableTools.some(tool => tool.isPlanningTool));
-        return action;
-      };
-    const controller = scriptedController({
-      decisions: [
-        observe({ type: 'tool', tool: 'failing' }),
-        observe({ type: 'tool', tool: 'plan' }),
-        observe({ type: 'respond', outcome: 'needs_input' }),
-      ],
-    });
-    const agent = createAgent({
-      instructions: 'Complete the task.',
-      controller,
-      model,
-      tools: { plan: scriptedPlanner([firstPlan]), failing },
-      planningTool: 'plan',
-    });
-
-    const result = await agent.run({ messages: [userMessage('Do the complex task.')] });
-
-    expect(planningVisible).toEqual([true, true, false]);
-    expect(result.plan).toMatchObject({ kind: 'explicit', version: 1 });
-    expect(result.stopReason).toBe('needs_input');
-  });
-
-  test('offers setup planning again when an implicit task continues after user input', async () => {
-    const firstController = scriptedController({
-      decisions: [{ type: 'respond', outcome: 'needs_input' }],
-    });
-    const definition = {
-      instructions: 'Complete the task.',
-      model,
-      tools: { plan: scriptedPlanner([firstPlan]), search: searchTool() },
-      planningTool: 'plan' as const,
-    };
-    const first = await createAgent({ ...definition, controller: firstController }).run({
-      messages: [userMessage('Cancel my reservations.')],
-    });
-    expect(first.plan?.kind).toBe('implicit');
-
-    const planningVisible: boolean[] = [];
-    const continuedController = scriptedController({
-      decisions: [
-        context => {
-          planningVisible.push(context.availableTools.some(tool => tool.isPlanningTool));
-          return { type: 'tool', tool: 'plan' };
-        },
-        { type: 'respond', outcome: 'needs_input' },
-      ],
-    });
-    const continued = await createAgent({ ...definition, controller: continuedController }).run({
-      messages: [...first.messages, userMessage('They are A1 and B2.', 'user-2')],
-    });
-
-    expect(planningVisible).toEqual([true]);
-    expect(continued.plan).toMatchObject({ kind: 'explicit', version: 1 });
   });
 
   test('run and stream produce the same messages and text', async () => {
@@ -231,11 +136,10 @@ describe('phase 1 demonstration', () => {
 });
 
 describe('termination paths', () => {
-  test('a low-confidence step completion does not end the turn', async () => {
+  test('a blocked completion does not end the turn', async () => {
     const controller = scriptedController({
       decisions: [
-        { type: 'tool', tool: 'plan' },
-        { action: { type: 'complete_step' }, confidence: 0 },
+        { type: 'respond', outcome: 'completed' },
         { type: 'respond', outcome: 'needs_input' },
       ],
       assess: { goalMet: false },
@@ -245,111 +149,12 @@ describe('termination paths', () => {
       instructions: 'Answer the question.',
       controller,
       model,
-      tools: { plan: scriptedPlanner([firstPlan]), search: searchTool() },
-      planningTool: 'plan',
+      tools: { search: searchTool() },
     });
 
     const result = await agent.run({ messages: [userMessage('Do the thing.')] });
     expect(result.stopReason).toBe('needs_input');
     expect(result.state.blockers.at(0)?.reason).toContain('Completion was requested');
-  });
-
-  test('the unified control operation checks the goal on every cycle', async () => {
-    let assessed = 0;
-    const controller = scriptedController({
-      decisions: [
-        { type: 'tool', tool: 'search' },
-        { type: 'tool', tool: 'search' },
-        { type: 'respond', outcome: 'completed' },
-      ],
-      assess: () => {
-        assessed += 1;
-        return { goalMet: true };
-      },
-    });
-
-    const agent = createAgent({ instructions: 'Answer the question.', controller, model, tools: { search: searchTool() } });
-    const result = await agent.run({ messages: [userMessage('Do the thing.')] });
-    expect(assessed).toBe(3);
-    expect(result.stopReason).toBe('completed');
-    expect(result.state.goal?.outcome).toBe('passed');
-  });
-
-  test('crossing off the implicit step completes the task', async () => {
-    const controller = scriptedController({
-      decisions: [
-        { type: 'respond', outcome: 'completed' },
-        { type: 'respond', outcome: 'needs_input' },
-      ],
-      assess: { goalMet: true },
-    });
-
-    const agent = createAgent({ instructions: 'Answer the question.', controller, model, tools: { search: searchTool() } });
-    const result = await agent.run({ messages: [userMessage('Do the thing.')] });
-    expect(result.stopReason).toBe('completed');
-    expect(result.state.stepStatuses).toEqual({ request: 'done' });
-  });
-
-  test('a completed step ends without another controller decision', async () => {
-    const controller = scriptedController({
-      decisions: [{ type: 'complete_step' }],
-    });
-
-    const agent = createAgent({ instructions: 'Answer the question.', controller, model, tools: { search: searchTool() } });
-    const result = await agent.run({ messages: [userMessage('Do the thing.')] });
-    expect(result.stopReason).toBe('completed');
-    expect(result.state.stepsUsed).toBe(1);
-    expect(controller.consumed).toBe(1);
-  });
-
-  test('alternating between two actions without new evidence is reported, then ends the turn', async () => {
-    const lookup = agentTool({
-      description: 'Look something up.',
-      inputSchema: z.object({}),
-      risk: 'read',
-      resolveInput: () => ({}),
-      execute: () => ({ same: true }),
-    });
-    const other = agentTool({
-      description: 'Look something else up.',
-      inputSchema: z.object({}),
-      risk: 'read',
-      resolveInput: () => ({}),
-      execute: () => ({ same: true }),
-    });
-    const controller = scriptedController({
-      decisions: Array.from({ length: 20 }, (_, index) => ({ type: 'tool', tool: index % 2 === 0 ? 'lookup' : 'other' }) as const),
-    });
-    const agent = createAgent({ instructions: 'Find it.', controller, model, tools: { lookup, other } });
-    const result = await agent.run({ messages: [userMessage('Find it.')] });
-    expect(result.stopReason).toBe('blocked');
-    const reports = result.state.blockers.filter(blocker => blocker.kind === 'no_progress');
-    expect(reports[0]?.reason).toContain('alternated');
-    expect(reports).toHaveLength(2);
-  });
-
-  test('a polling tool may repeat within its time limit', async () => {
-    let polls = 0;
-    const status = agentTool({
-      description: 'Check job status.',
-      inputSchema: z.object({}),
-      risk: 'read',
-      repeat: 'poll',
-      pollTimeoutMs: 60_000,
-      resolveInput: () => ({}),
-      execute: () => {
-        polls += 1;
-        return { state: 'running' };
-      },
-    });
-    const controller = scriptedController({
-      decisions: [...Array.from({ length: 8 }, () => ({ type: 'tool', tool: 'status' }) as const), { type: 'respond', outcome: 'needs_input' }],
-    });
-    const agent = createAgent({ instructions: 'Wait for the job.', controller, model, tools: { status } });
-    const result = await agent.run({ messages: [userMessage('Is it done?')] });
-    expect(polls).toBe(8);
-    expect(result.state.blockers).toHaveLength(0);
-    expect(result.stopReason).toBe('needs_input');
   });
 
   test('the step limit produces a useful response', async () => {
@@ -399,39 +204,6 @@ describe('termination paths', () => {
     const result = await agent.run({ messages: [userMessage('Try it.')] });
     expect(result.stopReason).toBe('blocked');
     expect(result.steps).toBeLessThan(20);
-  });
-
-  test('different resolved inputs are different attempts even when none can run', async () => {
-    let index = 0;
-    const lookup = agentTool({
-      description: 'Look up one record.',
-      inputSchema: z.object({ id: z.string().min(100) }),
-      risk: 'read',
-      resolveInput: () => ({ id: `record-${++index}` }),
-      execute: () => ({ ok: true }),
-    });
-    const controller = scriptedController({
-      decisions: [
-        { type: 'tool', tool: 'lookup' },
-        { type: 'tool', tool: 'lookup' },
-        { type: 'tool', tool: 'lookup' },
-        { type: 'tool', tool: 'lookup' },
-        { type: 'respond', outcome: 'blocked' },
-      ],
-    });
-    const agent = createAgent({
-      instructions: 'Inspect each known record.',
-      controller,
-      model,
-      tools: { lookup },
-      policy: { repeatLimit: 2 },
-    });
-
-    const result = await agent.run({ messages: [userMessage('Inspect four records.')] });
-
-    expect(result.stopReason).toBe('blocked');
-    expect(index).toBe(4);
-    expect(result.state.blockers.filter(blocker => blocker.kind === 'no_progress')).toHaveLength(0);
   });
 
   test('cancellation stops work and preserves partial text', async () => {

@@ -5,7 +5,7 @@ import type { AgentContext } from '../src/tool.ts';
 
 export const firstPlan: PlanProposal = {
   objective: 'Apply the requested change and verify it',
-  goals: [
+  steps: [
     { id: 'locate', objective: 'Find the affected file', dependencies: [] },
     { id: 'edit', objective: 'Apply the change', dependencies: ['locate'] },
     { id: 'verify', objective: 'Run the tests', dependencies: ['edit'] },
@@ -14,7 +14,7 @@ export const firstPlan: PlanProposal = {
 
 export const revisedPlan: PlanProposal = {
   objective: 'Apply the requested change and verify it',
-  goals: [
+  steps: [
     { id: 'locate', objective: 'Find the affected file', dependencies: [] },
     { id: 'edit', objective: 'Apply the change with the correct export name', dependencies: ['locate'] },
     { id: 'verify', objective: 'Run the tests', dependencies: ['edit'] },

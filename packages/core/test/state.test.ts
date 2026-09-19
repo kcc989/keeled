@@ -19,7 +19,7 @@ function agent() {
       assess: context => ({
         steps: {
           locate: {
-            complete: context.state.observations.some(o => o.kind === 'tool-result' && o.tool === 'search'),
+            complete: context.state.observations.some(o => o.kind === 'tool-result'),
           },
         },
         goalMet: false,
@@ -42,50 +42,9 @@ describe('reduceState', () => {
     expect(checkpoint?.state.stepStatuses['locate']).toBe('done');
     expect(checkpoint?.state.toolCalls).toBe(2);
 
-    // The terminal transition clears loop-local state but preserves the task.
+    // The terminal transition closes the turn, so replay starts the next one clean.
     expect(replayed.stepsUsed).toBe(0);
-    expect(replayed.toolCalls).toBe(0);
-    expect(replayed.observations).toEqual([]);
-    expect(replayed.blockers).toEqual([]);
-    expect(replayed.plan).toMatchObject({ kind: 'explicit', version: 1 });
-    expect(replayed.stepStatuses['locate']).toBe('done');
-    expect(replayed.plan?.steps.find(step => step.id === 'locate')?.evidence).toHaveLength(1);
     expect(replayed.stopReason).toBe('needs_input');
-  });
-
-  test('a follow-up message updates the durable task without replacing its plan', async () => {
-    const first = await agent().run({ messages: [userMessage('Cancel my reservation.')] });
-    const controller = scriptedController({
-      decisions: [{ type: 'respond', outcome: 'needs_input' }],
-      assess: {
-        steps: { locate: { complete: true }, edit: { complete: false }, verify: { complete: false } },
-        goalMet: false,
-      },
-    });
-    const continued = createAgent({
-      instructions: 'Answer the question.',
-      controller,
-      model,
-      tools: { plan: scriptedPlanner([firstPlan]), search: searchTool() },
-      planningTool: 'plan',
-    });
-
-    const second = await continued.run({
-      messages: [...first.messages, userMessage("I'm sick.", 'user-2')],
-    });
-    const context = controller.contexts[0];
-
-    expect(context?.request).toBe("I'm sick.");
-    expect(context?.plan).toMatchObject({
-      id: first.plan?.id,
-      version: 1,
-      kind: 'explicit',
-      objective: firstPlan.objective,
-    });
-    expect(context?.stepStatuses['locate']).toBe('done');
-    expect(context?.plan?.steps.find(step => step.id === 'locate')?.evidence).toHaveLength(1);
-    expect(context?.observations).toEqual([]);
-    expect(second.messages.at(-1)?.parts.filter(part => part.type === 'data-plan')).toHaveLength(0);
   });
 
   test('an interrupted turn reduces to the state reached so far', async () => {
@@ -101,27 +60,8 @@ describe('reduceState', () => {
 
     const partial = reduceState([...result.messages.slice(0, -1), truncated]);
     expect(partial.plan?.version).toBe(1);
-    expect(partial.stepsUsed).toBe(4);
+    expect(partial.stepsUsed).toBe(3);
     expect(partial.stopReason).toBeUndefined();
-  });
-
-  test('a terminal task does not lend its plan to the next request', async () => {
-    const completed = createAgent({
-      instructions: 'Answer the question.',
-      controller: scriptedController({
-        decisions: [{ type: 'respond', outcome: 'completed' }],
-        assess: { goalMet: true },
-      }),
-      model,
-      tools: { search: searchTool() },
-    });
-
-    const result = await completed.run({ messages: [userMessage('What is two plus two?')] });
-    const next = reduceState(result.messages);
-
-    expect(result.plan).toMatchObject({ kind: 'implicit', objective: 'What is two plus two?' });
-    expect(next.plan).toBeUndefined();
-    expect(next.stopReason).toBe('completed');
   });
 
   test('state starts empty', () => {

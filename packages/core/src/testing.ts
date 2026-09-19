@@ -1,13 +1,11 @@
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModel } from 'ai';
 import type {
-  Authorization,
   Controller,
   ControllerContext,
-  ControlResult,
   ControllerDecision,
   NextAction,
-  PendingAction,
+  ProgressAssessment,
 } from './controller.ts';
 import type { AgentMessage } from './types.ts';
 
@@ -15,11 +13,12 @@ export interface ScriptedAssessment {
   steps?: Record<string, { complete: boolean; confidence?: number }>;
   goalMet?: boolean;
   goalConfidence?: number;
+  planValid?: boolean;
+  planValidConfidence?: number;
 }
 
 export type ScriptedDecision =
   | NextAction
-  | ControllerDecision
   | ((context: ControllerContext) => NextAction | ControllerDecision);
 
 export interface ScriptedControllerOptions {
@@ -27,11 +26,6 @@ export interface ScriptedControllerOptions {
   assess?: ScriptedAssessment | ((context: ControllerContext) => ScriptedAssessment);
   /** Action used once the script runs out. Defaults to responding `blocked`. */
   fallback?: NextAction;
-  /** When set, the controller authorizes pending calls with these answers. */
-  authorize?: (
-    action: PendingAction,
-    context: ControllerContext,
-  ) => { permitted: boolean; needsVerification?: boolean; confirmed: boolean };
 }
 
 /**
@@ -53,60 +47,36 @@ export function scriptedController(options: ScriptedControllerOptions): Controll
     get contexts() {
       return contexts;
     },
-    async control(context: ControllerContext): Promise<ControlResult> {
+    async decide(context: ControllerContext): Promise<ControllerDecision> {
       contexts.push(context);
-      const source =
-        typeof options.assess === 'function' ? options.assess(context) : (options.assess ?? {});
-      const current = context.currentStep;
-      const assessed = current === undefined ? undefined : source.steps?.[current.id];
-      if (current !== undefined && assessed?.complete === true) {
-        return {
-          action: { type: 'complete_step', stepId: current.id },
-          confidence: assessed.confidence ?? 1,
-          usage: { calls: 1, inputTokens: 0, outputTokens: 0 },
-        };
-      }
       const entry = options.decisions[index];
-      const resolved =
-        entry === undefined
-          ? options.fallback ?? { type: 'respond' as const, outcome: 'blocked' as const }
-          : typeof entry === 'function'
-            ? entry(context)
-            : entry;
+      index += 1;
+      if (entry === undefined) {
+        return { action: options.fallback ?? { type: 'respond', outcome: 'blocked' } };
+      }
+      const resolved = typeof entry === 'function' ? entry(context) : entry;
       const decision: ControllerDecision =
         'action' in resolved ? resolved : { action: resolved };
-      index += 1;
-      if (
-        current !== undefined &&
-        source.goalMet === true &&
-        decision.action.type === 'respond' &&
-        decision.action.outcome === 'completed'
-      ) {
-        return {
-          action: { type: 'complete_step', stepId: current.id },
-          confidence: source.goalConfidence ?? 1,
-          usage: { calls: 1, inputTokens: 0, outputTokens: 0 },
+      return { confidence: 1, usage: { calls: 1, inputTokens: 0, outputTokens: 0 }, ...decision };
+    },
+    async assess(context: ControllerContext): Promise<ProgressAssessment> {
+      const source =
+        typeof options.assess === 'function' ? options.assess(context) : (options.assess ?? {});
+      const steps: ProgressAssessment['steps'] = {};
+      for (const step of context.plan?.steps ?? []) {
+        const entry = source.steps?.[step.id];
+        steps[step.id] = {
+          complete: entry?.complete ?? false,
+          confidence: entry?.confidence ?? 1,
         };
       }
       return {
-        confidence: 1,
-        ...decision,
+        steps,
+        goalMet: { complete: source.goalMet ?? false, confidence: source.goalConfidence ?? 1 },
+        planValid: { valid: source.planValid ?? true, confidence: source.planValidConfidence ?? 1 },
         usage: { calls: 1, inputTokens: 0, outputTokens: 0 },
       };
     },
-    ...(options.authorize === undefined
-      ? {}
-      : {
-          async authorize(context: ControllerContext, action: PendingAction): Promise<Authorization> {
-            const answer = options.authorize!(action, context);
-            return {
-              permitted: { value: answer.permitted, confidence: 1 },
-              needsVerification: { value: answer.needsVerification ?? false, confidence: 1 },
-              confirmed: { value: answer.confirmed, confidence: 1 },
-              usage: { calls: 1, inputTokens: 0, outputTokens: 0 },
-            };
-          },
-        }),
   };
 }
 

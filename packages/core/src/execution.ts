@@ -1,32 +1,24 @@
 import { createUIMessageStream, createUIMessageStreamResponse } from 'ai';
-import { asSchema, jsonSchema, safeValidateTypes } from '@ai-sdk/provider-utils';
+import { safeValidateTypes } from '@ai-sdk/provider-utils';
 import type { UIMessageStreamOutcome } from 'ai';
 import { GenerationHost } from './generation.ts';
-import { createId, stableHash } from './ids.ts';
-import { MissingInformation, PlanValidationError, errorMessage, isAbortError } from './errors.ts';
+import { createId } from './ids.ts';
+import { PlanValidationError, errorMessage, isAbortError } from './errors.ts';
 import type { Plan } from './plan.ts';
 import {
   adoptProposal,
+  dependenciesSatisfied,
   parsePlanProposal,
   type PlanProposal,
 } from './plan.ts';
-import {
-  awaitingConfirmation,
-  callHistory,
-  presentResult,
-  digestObservations,
-  digestPlan,
-  latestRequest,
-  projectMessages,
-} from './projection.ts';
+import { digestObservations, digestPlan, latestRequest, projectMessages } from './projection.ts';
 import { Turn, type Writer } from './turn.ts';
 import type { AgentContext, AgentToolExecutionOptions, AgentToolSet, RegisteredTool } from './tool.ts';
-import type { AvailableTool, ControllerContext, ControlResult, NextAction, PendingAction } from './controller.ts';
+import type { AvailableTool, ControllerContext, NextAction } from './controller.ts';
 import type {
   AgentMessage,
   AgentResult,
   ExecutionState,
-  BlockerKind,
   ResolvedPolicy,
   StopReason,
   UsageTotals,
@@ -35,64 +27,6 @@ import type {
 import type { AgentDefinition, RunOptions } from './agent.ts';
 
 type Chunk = Parameters<Writer['write']>[0];
-
-const defaultPollTimeoutMs = 60_000;
-
-async function requiredParameters(tool: RegisteredTool): Promise<string[]> {
-  try {
-    const schema = (await asSchema(tool.inputSchema).jsonSchema) as { required?: unknown };
-    return Array.isArray(schema.required) ? schema.required.filter((name): name is string => typeof name === 'string') : [];
-  } catch {
-    return [];
-  }
-}
-
-interface Denial {
-  kind: BlockerKind;
-  reason: string;
-  resolution: string;
-}
-
-/** A refusal and what it was decided against, so it is reconsidered when any of that changes. */
-interface Refusal {
-  denial: Denial;
-  /** The instructions it applied. */
-  policy: string;
-  /** For each result it relied on, the call and that result, so a changed result voids it. */
-  cited: { tool: string; input: unknown; result: string }[];
-  /** Successful state-changing calls when it was made. */
-  writes: number;
-  /** Distinct evidence when it was made; a refusal for missing evidence yields to any new. */
-  evidence: number;
-  /** When a time-dependent refusal lapses. */
-  expiresAt?: number;
-}
-
-const timeSensitiveRefusalMs = 60_000;
-
-interface PermissionVerdict {
-  permitted: boolean;
-  reason: string;
-  /** Evidence that would settle it when the results cannot; empty when they suffice. */
-  missing: string;
-  /** References of the tool results the verdict relies on. */
-  evidence: string[];
-  /** The verdict depends on the current time or on state that can change outside the agent. */
-  timeSensitive: boolean;
-}
-
-const permissionSchema = jsonSchema<PermissionVerdict>({
-  type: 'object',
-  properties: {
-    permitted: { type: 'boolean' },
-    reason: { type: 'string' },
-    missing: { type: 'string' },
-    evidence: { type: 'array', items: { type: 'string' } },
-    timeSensitive: { type: 'boolean' },
-  },
-  required: ['permitted', 'reason', 'missing', 'evidence', 'timeSensitive'],
-  additionalProperties: false,
-});
 
 export class AgentExecution<TOOLS extends AgentToolSet> {
   readonly #stream: ReadableStream<Chunk>;
@@ -190,11 +124,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
   readonly #usage: UsageTotals;
   readonly #request: string;
   readonly #originalMessages: AgentMessage[];
-  /** Refusals this turn, keyed by call, with the tool evidence they were made against. */
-  readonly #refusals = new Map<string, Refusal>();
   #stopReason: StopReason = 'limit';
-  #initialPlanningAvailable: boolean;
-  #recoveryPlanningAvailable = false;
 
   constructor(
     definition: AgentDefinition<TOOLS>,
@@ -214,16 +144,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       else options.abortSignal.addEventListener('abort', forward, { once: true });
     }
     this.#request = latestRequest(originalMessages);
-    const pollStarted = new Map<string, number>();
     this.#turn = new Turn({
-      isExempt: name => {
-        const tool = definition.registry.get(name);
-        if (tool?.repeat !== 'poll') return false;
-        const now = Date.now();
-        const started = pollStarted.get(name) ?? now;
-        pollStarted.set(name, started);
-        return now - started < (tool.pollTimeoutMs ?? defaultPollTimeoutMs);
-      },
       request: this.#request,
       instructions: definition.instructions,
       originalMessages,
@@ -233,10 +154,6 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       usage,
       messageId: createId('msg'),
     });
-    // Offer one focused task-state update at setup and when a waiting task receives
-    // another user message. It does not compete with domain actions on every cycle.
-    this.#initialPlanningAvailable =
-      this.#turn.plan?.kind !== 'explicit' || this.#turn.state.stopReason === 'needs_input';
     this.#generation = new GenerationHost({
       defaultModel: definition.model,
       usage,
@@ -248,97 +165,37 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
   async execute(): Promise<void> {
     this.#turn.start();
     let outcome: StopReason = 'limit';
-    let reportedAtEvidence: number | undefined;
-    const resumable = [...awaitingConfirmation(this.#turn.conversation)];
 
     try {
       while (this.#turn.hasWorkBudget()) {
         this.#turn.throwIfAborted();
-        if (this.#allStepsDone()) {
-          outcome = 'completed';
-          break;
-        }
         this.#turn.beginCycle();
 
-        const resume = resumable.shift();
-        if (resume !== undefined) {
-          const action: Extract<NextAction, { type: 'tool' }> = {
-            type: 'tool',
-            tool: resume.tool,
-            ...(resume.stepId === undefined ? {} : { stepId: resume.stepId }),
-          };
-          this.#turn.recordDecision({
-            action,
-            rationale: 'The runtime resumed the exact action held for confirmation.',
-          });
-          await this.#callTool(action, { preparedInput: resume.input });
-          this.#offerRecoveryAfterToolFailure(action);
-        } else {
-          const planningAvailable = this.#initialPlanningAvailable || this.#recoveryPlanningAvailable;
-          const context = this.#turn.decisionContext(
-            undefined,
-            await this.#availableTools(planningAvailable),
-          );
-          const control = await this.#definition.controller.control(context);
-          this.#initialPlanningAvailable = false;
-          this.#recoveryPlanningAvailable = false;
-          const action = this.#normalize(control.action, context);
+        const verification = await this.#verifyProgress();
+        const context = this.#turn.decisionContext(verification, await this.#availableTools());
+        const decision = await this.#definition.controller.decide(context);
+        const action = this.#normalize(decision.action, context);
 
-          this.#turn.recordDecision(
-            { ...control, action },
-            action === control.action
-              ? undefined
-              : { reason: 'The runtime attributed the action to the current plan step.' },
-          );
+        this.#turn.recordDecision(
+          { ...decision, action },
+          action === decision.action ? undefined : { reason: 'Action rejected by the runtime.' },
+        );
 
-          if (action.type === 'complete_step') {
-            if ((control.confidence ?? 0) < this.#policy.inferredConfidenceFloor) {
-              this.#turn.recordBlockedCompletion(undefined);
-            } else if (action.stepId !== undefined) {
-              this.#completeStep(action.stepId, control.confidence);
-            }
-          } else if (action.type === 'respond') {
-            if (action.outcome === 'completed') {
-              const stepId = context.currentStep?.id;
-              if (stepId === undefined || (control.confidence ?? 0) < this.#policy.inferredConfidenceFloor) {
-                this.#turn.recordBlockedCompletion(undefined);
-              } else {
-                this.#completeStep(stepId, control.confidence);
-              }
-            } else {
-              outcome = action.outcome;
-              break;
-            }
+        if (action.type === 'respond') {
+          if (action.outcome === 'completed' && !verification.canComplete) {
+            this.#turn.recordBlockedCompletion(verification);
           } else {
-            await this.#callTool(action);
-            this.#offerRecoveryAfterToolFailure(action);
-          }
-        }
-
-        // The first report at one evidence state is feedback. Repeating without any new
-        // evidence ends the turn. Later evidence permits a fresh recovery attempt.
-        const stalled = this.#turn.detectNoProgress();
-        if (stalled !== undefined) {
-          const evidence = this.#turn.distinctEvidence();
-          if (reportedAtEvidence === evidence) {
-            this.#turn.recordBlocker(
-              'no_progress',
-              `The agent kept ${stalled === 'repeating' ? 'repeating the same action' : 'alternating between two actions'} after being told it was making no progress.`,
-              'Respond to the user with what is known.',
-            );
-            outcome = 'blocked';
+            outcome = action.outcome;
             break;
           }
-          reportedAtEvidence = evidence;
-          this.#turn.markNoProgressReported();
-          this.#recoveryPlanningAvailable = this.#definition.planningTool !== undefined;
-          this.#turn.recordBlocker(
-            'no_progress',
-            stalled === 'repeating'
-              ? 'The same action was repeated without producing any new evidence.'
-              : 'Two actions alternated without producing any new evidence.',
-            'Revise the plan once, choose a different action, or respond with what is known.',
-          );
+        } else {
+          await this.#callTool(action);
+        }
+
+        if (this.#turn.isRepeatingWithoutProgress()) {
+          this.#turn.recordBlocker('The same action repeated without new evidence.');
+          outcome = 'blocked';
+          break;
         }
       }
     } catch (error) {
@@ -357,7 +214,6 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       stopReason,
       usage: this.#usage,
       state: this.#turn.state as ExecutionState,
-      taskState: this.#turn.plan,
       plan: this.#turn.plan,
       steps: this.#turn.state.stepsUsed,
     };
@@ -365,157 +221,127 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
 
   // --- decision support -------------------------------------------------
 
-  /** Crosses off one step. Completion of every step completes the task. */
-  #completeStep(stepId: string, confidence: number | undefined): void {
+  async #verifyProgress(): Promise<VerificationSummary> {
+    const context = this.#turn.decisionContext(undefined, await this.#availableTools());
+    const assessment = await this.#definition.controller.assess(context);
+    if (assessment.usage !== undefined) this.#turn.accountController(assessment.usage);
+
+    const floor = this.#policy.inferredConfidenceFloor;
     const plan = this.#turn.plan;
-    if (plan === undefined || !plan.steps.some(step => step.id === stepId)) return;
     const planVersion = plan?.version ?? 0;
+    const retained = this.#turn.state.verification;
     const steps: VerificationSummary['steps'] = {};
-    for (const step of plan.steps) {
-      const previous = this.#turn.state.verification[step.id];
-      steps[step.id] =
-        step.id === stepId
-          ? { stepId, outcome: 'passed', basis: 'inferred', confidence, planVersion }
-          : previous ?? { stepId: step.id, outcome: 'unknown', basis: 'inferred', planVersion };
+
+    for (const step of plan?.steps ?? []) {
+      const result = assessment.steps[step.id];
+      const outcome =
+        result === undefined || result.confidence < floor
+          ? 'unknown'
+          : result.complete
+            ? 'passed'
+            : 'failed';
+
+      // An assessment that is merely uncertain reports no evidence, so a result already
+      // recorded against this plan revision stands. Only new evidence or a plan
+      // revision invalidates it.
+      const previous = retained[step.id];
+      if (outcome === 'unknown' && previous !== undefined && previous.planVersion === planVersion) {
+        steps[step.id] = previous;
+        continue;
+      }
+
+      steps[step.id] = {
+        stepId: step.id,
+        outcome,
+        basis: 'inferred',
+        confidence: result?.confidence,
+        planVersion,
+      };
     }
-    const complete = plan.steps.every(
-      step => step.id === stepId || this.#turn.stepStatuses[step.id] === 'done',
-    );
-    this.#turn.recordVerification({
+
+    const goalOutcome =
+      assessment.goalMet.confidence < floor
+        ? 'unknown'
+        : assessment.goalMet.complete
+          ? 'passed'
+          : 'failed';
+
+    const retainedGoal = this.#turn.state.goal;
+    const goal: VerificationSummary['goal'] =
+      goalOutcome === 'unknown' && retainedGoal !== undefined
+        ? retainedGoal
+        : { outcome: goalOutcome, basis: 'inferred', confidence: assessment.goalMet.confidence };
+
+    const summary: VerificationSummary = {
       steps,
-      goal: { outcome: complete ? 'passed' : 'unknown', basis: 'inferred', confidence },
-      planValid: true,
-      planValidConfidence: 1,
-      canComplete: complete,
+      goal,
+      planValid: assessment.planValid.valid,
+      planValidConfidence: assessment.planValid.confidence,
+      canComplete:
+        goal.outcome === 'passed' &&
+        Object.values(steps).every(step => step.outcome === 'passed'),
       basis: 'inferred',
-    });
-  }
+    };
 
-  #allStepsDone(): boolean {
-    const plan = this.#turn.plan;
-    return plan !== undefined && plan.steps.every(step => this.#turn.stepStatuses[step.id] === 'done');
-  }
-
-  #offerRecoveryAfterToolFailure(action: Extract<NextAction, { type: 'tool' }>): void {
-    if (action.tool === this.#definition.planningTool) return;
-    const latest = this.#turn.state.observations.at(-1);
-    if (latest?.kind === 'tool-error' && latest.tool === action.tool) {
-      this.#recoveryPlanningAvailable = this.#definition.planningTool !== undefined;
-    }
+    this.#turn.recordVerification(summary);
+    return summary;
   }
 
   #normalize(action: NextAction, context: ControllerContext): NextAction {
     if (action.type === 'respond') return action;
 
-    if (action.type === 'complete_step') {
-      return context.currentStep === undefined
-        ? { type: 'respond', outcome: 'blocked' }
-        : { type: 'complete_step', stepId: context.currentStep.id };
-    }
-
     const available = context.availableTools.some(tool => tool.name === action.tool);
     if (!available) {
       return { type: 'respond', outcome: 'blocked' };
     }
-    // Planning changes the plan itself, not a domain step. Its result is linked through
-    // PlanRecord.sourceCallId rather than attributed as evidence for one current step.
-    if (action.tool === this.#definition.planningTool) return action;
 
-    const step = context.currentStep;
-    if (step === undefined) return { type: 'respond', outcome: 'blocked' };
-    return {
-      ...action,
-      stepId: step.id,
-      objective: step.objective,
-      evidence: [...step.evidence],
-    };
+    const plan = context.plan;
+    if (action.stepId !== undefined) {
+      if (plan === undefined || !plan.steps.some(step => step.id === action.stepId)) {
+        return { type: 'tool', tool: action.tool };
+      }
+      if (!dependenciesSatisfied(plan, action.stepId, context.stepStatuses)) {
+        return { type: 'tool', tool: action.tool };
+      }
+    }
+    return action;
   }
 
   // --- tool invocation --------------------------------------------------
 
-  async #callTool(
-    action: Extract<NextAction, { type: 'tool' }>,
-    callOptions: { preparedInput?: unknown } = {},
-  ): Promise<void> {
+  async #callTool(action: Extract<NextAction, { type: 'tool' }>): Promise<void> {
     const tool = this.#definition.registry.get(action.tool);
     if (tool === undefined) {
-      this.#turn.recordBlocker(
-        'unavailable',
-        `Tool "${action.tool}" is not registered.`,
-        'Choose one of the available tools, or respond to the user.',
-        { tool: action.tool },
-      );
+      this.#turn.recordBlocker(`Tool "${action.tool}" is not registered.`, { tool: action.tool });
       return;
     }
 
     if (!this.#policy.allowedRisks.has(tool.risk)) {
       this.#turn.recordBlocker(
-        'policy_denied',
         `Application policy does not allow tools with risk "${tool.risk}".`,
-        'Do not retry it; respond to the user without it.',
         { tool: tool.name, stepId: action.stepId },
       );
       return;
     }
 
-    const context = this.#agentContext(action);
+    const context = this.#agentContext(action.stepId);
 
     let input: unknown;
     try {
-      input = 'preparedInput' in callOptions ? callOptions.preparedInput : await this.#resolveInput(tool, context);
+      input = await this.#resolveInput(tool, context);
     } catch (error) {
-      if (this.#turn.isAborted() || isAbortError(error)) throw error;
-      if (error instanceof MissingInformation) {
-        this.#turn.recordToolAttempt(tool.name, { missing: error.missing }, action.stepId);
-        this.#turn.recordBlocker(
-          'missing_evidence',
-          `${tool.name} cannot be called yet: ${error.missing}`,
-          `Obtain it first, from a lookup or from the user: ${error.missing}`,
-          { tool: tool.name, stepId: action.stepId },
-        );
-        return;
-      }
-      this.#turn.recordToolAttempt(tool.name, { resolutionError: errorMessage(error) }, action.stepId);
-      this.#turn.recordBlocker(
-        'invalid_input',
-        `Input resolution failed: ${errorMessage(error)}`,
-        `Obtain the values ${tool.name} needs, from a lookup or from the user, before calling it again.`,
-        { tool: tool.name, stepId: action.stepId },
-      );
+      this.#turn.recordBlocker(`Input resolution failed: ${errorMessage(error)}`, {
+        tool: tool.name,
+        stepId: action.stepId,
+      });
       return;
     }
 
     const validated = await safeValidateTypes({ value: input, schema: tool.inputSchema });
     if (!validated.success) {
-      this.#turn.recordToolAttempt(tool.name, input, action.stepId);
-      this.#turn.recordBlocker(
-        'invalid_input',
-        `Input failed schema validation: ${validated.error.message}`,
-        `Call ${tool.name} only with input that matches its schema.`,
-        { tool: tool.name, stepId: action.stepId, input },
-      );
-      return;
-    }
-
-    this.#turn.recordToolAttempt(tool.name, validated.value, action.stepId);
-
-    if (tool.repeat === 'reuse' && this.#alreadyReturned(tool.name, validated.value, action.stepId)) {
-      this.#turn.recordBlocker(
-        'duplicate',
-        `${tool.name} already returned a result this turn for this exact input: ${JSON.stringify(validated.value)}. ` +
-          'The tool is marked reusable and no state-changing call has succeeded since.',
-        'Use the result already in the call history.',
-        { tool: tool.name, stepId: action.stepId, input: validated.value },
-      );
-      return;
-    }
-
-    const denial = await this.#authorize(tool, validated.value, action.stepId);
-    if (denial !== undefined) {
-      this.#turn.recordBlocker(denial.kind, denial.reason, denial.resolution, {
+      this.#turn.recordBlocker(`Input failed schema validation: ${validated.error.message}`, {
         tool: tool.name,
         stepId: action.stepId,
-        input: validated.value,
       });
       return;
     }
@@ -556,180 +382,10 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     }
   }
 
-  /**
-   * Asks the controller whether a pending call may run. Unless the controller is confident
-   * both that the call is permitted and that no calculation is needed to tell, the model
-   * checks the instructions and evidence and its verdict decides. A permitted call still
-   * waits for any confirmation the instructions require, and a doubtful confirmation counts
-   * as none. Returns the reason when the call may not run.
-   */
-  async #authorize(tool: RegisteredTool, input: unknown, stepId: string | undefined): Promise<Denial | undefined> {
-    const controller = this.#definition.controller;
-    const policy = this.#policy.authorization;
-    if (!policy.risks.has(tool.risk) || controller.authorize === undefined) return undefined;
-
-    // A retry of a refused call gets the same answer while what it was decided against holds.
-    const key = stableHash({ tool: tool.name, input });
-    const refused = this.#refusals.get(key);
-    if (refused !== undefined && this.#stillHolds(refused)) return refused.denial;
-
-    const action: PendingAction = { tool: tool.name, description: tool.description, risk: tool.risk, input, stepId };
-    const context = this.#turn.decisionContext(undefined, await this.#availableTools());
-    const answer = await controller.authorize(context, action);
-    if (answer.usage !== undefined) this.#turn.accountController(answer.usage);
-
-    const clear =
-      answer.permitted.value &&
-      answer.permitted.confidence >= policy.permittedFloor &&
-      !answer.needsVerification.value &&
-      answer.needsVerification.confidence >= policy.verificationFloor;
-    const call = `${tool.name} ${JSON.stringify(input)}`;
-    const refuse = (denial: Denial, verdict?: PermissionVerdict) => {
-      if (denial.kind !== 'needs_confirmation') this.#refusals.set(key, this.#refusal(denial, context, verdict));
-      return denial;
-    };
-
-    let basis = 'controller';
-    if (!clear) {
-      const verdict = await this.#verifyPermission(action, context);
-      if (!verdict.permitted) {
-        const missing = (typeof verdict.missing === 'string' ? verdict.missing : '').trim();
-        return refuse(
-          missing.length > 0
-            ? {
-                kind: 'missing_evidence',
-                reason: `Cannot yet show ${call} is permitted. ${verdict.reason}`,
-                resolution: `Obtain this evidence first: ${missing}`,
-              }
-            : {
-                kind: 'policy_denied',
-                reason: `Not permitted: ${call}. ${verdict.reason}`,
-                resolution: 'Do not retry this action; explain the refusal to the user or choose one the policy permits.',
-              },
-          verdict,
-        );
-      }
-      basis = `verified: ${verdict.reason}`;
-    }
-
-    if (!answer.confirmed.value || answer.confirmed.confidence < policy.confirmedFloor) {
-      return refuse({
-        kind: 'needs_confirmation',
-        reason: `Awaiting the user's explicit confirmation: ${call}.`,
-        resolution: 'Describe this exact action to the user and ask them to confirm it; it is checked again before it runs.',
-      });
-    }
-
-    this.#turn.recordTransition('authorized', `${call} (${basis})`);
-    return undefined;
-  }
-
-  #refusal(denial: Denial, context: ControllerContext, verdict: PermissionVerdict | undefined): Refusal {
-    const history = callHistory(context.conversation, context.observations);
-    const cited = (Array.isArray(verdict?.evidence) ? verdict.evidence : [])
-      .map(ref => history.find(call => call.ref === ref))
-      .filter(call => call !== undefined)
-      .map(call => ({ tool: call.tool, input: call.input, result: stableHash([call.outcome, call.result]) }));
-    return {
-      denial,
-      policy: stableHash(this.#definition.instructions),
-      cited,
-      writes: this.#successfulWrites(),
-      evidence: this.#turn.distinctEvidence(),
-      ...(verdict?.timeSensitive === true ? { expiresAt: Date.now() + timeSensitiveRefusalMs } : {}),
-    };
-  }
-
-  #stillHolds(refusal: Refusal): boolean {
-    if (refusal.policy !== stableHash(this.#definition.instructions)) return false;
-    if (refusal.writes !== this.#successfulWrites()) return false;
-    if (refusal.expiresAt !== undefined && Date.now() >= refusal.expiresAt) return false;
-    if (refusal.denial.kind === 'missing_evidence' && refusal.evidence !== this.#turn.distinctEvidence()) return false;
-    const history = callHistory(this.#turn.conversation, this.#turn.state.observations);
-    return refusal.cited.every(cited => {
-      const latest = history.findLast(
-        call => call.tool === cited.tool && stableHash(call.input) === stableHash(cited.input),
-      );
-      return latest === undefined || stableHash([latest.outcome, latest.result]) === cited.result;
-    });
-  }
-
-  /** Successful calls this turn that are not read-only, any of which may change state. */
-  #successfulWrites(): number {
-    return this.#turn.state.observations.filter(
-      observation =>
-        observation.kind === 'tool-result' &&
-        (this.#definition.registry.get(observation.tool ?? '')?.risk ?? 'unknown') !== 'read',
-    ).length;
-  }
-
-  /**
-   * Whether a reusable tool already returned a result this turn for this exact input and
-   * plan step, with no successful call since that is not read-only.
-   */
-  #alreadyReturned(toolName: string, input: unknown, stepId: string | undefined): boolean {
-    const observations = this.#turn.state.observations;
-    const key = stableHash(input);
-    const index = observations.findLastIndex(
-      observation =>
-        observation.kind === 'tool-result' &&
-        observation.tool === toolName &&
-        observation.stepId === stepId &&
-        stableHash(observation.input) === key,
-    );
-    if (index === -1) return false;
-    return !observations
-      .slice(index + 1)
-      .some(
-        observation =>
-          observation.kind === 'tool-result' &&
-          (this.#definition.registry.get(observation.tool ?? '')?.risk ?? 'unknown') !== 'read',
-      );
-  }
-
-  async #verifyPermission(
-    action: PendingAction,
-    context: ControllerContext,
-  ): Promise<PermissionVerdict> {
-    const calls = callHistory(context.conversation, context.observations)
-      .map(
-        call =>
-          `- [${call.ref}] ${call.tool}(${JSON.stringify(call.input)}) ` +
-          (call.outcome === 'result' ? `returned ${JSON.stringify(presentResult(call.result, call.ref))}` : `failed: ${String(call.result)}`),
-      )
-      .join('\n');
-    const result = await this.#generation.generateObject<PermissionVerdict>({
-      schema: permissionSchema,
-      name: 'permission',
-      system:
-        'You decide whether an agent may take one action now under its instructions. First identify the ' +
-        'conditions the instructions set for this kind of action; rules about other kinds of action do not ' +
-        'apply to it. Check each applicable condition, including dates, times, amounts, and counts, against ' +
-        'the tool results. If an applicable condition is unmet, or the tool results cannot show whether it ' +
-        'is met, the action is not permitted. If the instructions set no condition for it, it is permitted. ' +
-        'Do not consider whether the user has confirmed the action; that is checked separately.',
-      prompt: [
-        `Agent instructions:\n${this.#definition.instructions}`,
-        `Conversation:\n${projectMessages(context.conversation).map(m => `${m.role}: ${typeof m.content === 'string' ? m.content : ''}`).join('\n')}`,
-        `Tool calls so far:\n${calls.length === 0 ? 'None.' : calls}`,
-        `Proposed action:\n${action.tool} — ${action.description}\nInput: ${JSON.stringify(action.input)}`,
-        'State whether it is permitted and give the deciding reason in one sentence. If it is not permitted only ' +
-          'because the tool results cannot show whether a condition is met, set missing to the evidence that ' +
-          'would settle it; otherwise leave missing empty. List in evidence the references, in square brackets ' +
-          'above, of the tool results your verdict relies on. Set timeSensitive when the verdict depends on the ' +
-          'current time or on state that can change outside the agent.',
-      ].join('\n\n'),
-      abortSignal: this.#abort.signal,
-    });
-    return result.object;
-  }
-
   #adoptPlan(output: unknown, sourceCallId: string): void {
     if (this.#turn.state.planRevisions >= this.#policy.maxPlanRevisions) {
       this.#turn.recordBlocker(
-        'policy_denied',
         `The plan revision limit of ${this.#policy.maxPlanRevisions} was reached.`,
-        'Continue with the current plan.',
       );
       return;
     }
@@ -740,9 +396,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     } catch (error) {
       const reason =
         error instanceof PlanValidationError ? error.message : `Invalid plan proposal: ${errorMessage(error)}`;
-      this.#turn.recordBlocker('invalid_input', reason, 'Propose a plan that satisfies the plan rules.', {
-        tool: this.#definition.planningTool,
-      });
+      this.#turn.recordBlocker(reason, { tool: this.#definition.planningTool });
       return;
     }
 
@@ -758,17 +412,11 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     this.#turn.recordPlan({
       planId: adoption.plan.id,
       version: adoption.plan.version,
-      kind: adoption.plan.kind,
       objective: adoption.plan.objective,
-      constraints: [...adoption.plan.constraints],
-      knownFacts: adoption.plan.knownFacts.map(fact => ({ ...fact })),
       steps: adoption.plan.steps.map(step => ({
         id: step.id,
         objective: step.objective,
         dependencies: [...step.dependencies],
-        constraints: [...step.constraints],
-        completionCriteria: step.completionCriteria,
-        evidence: [...step.evidence],
       })),
       sourceCallId,
       previousVersion: previousPlan?.version,
@@ -793,21 +441,8 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
         `Agent instructions:\n${this.#definition.instructions}`,
         `Original request:\n${this.#request}`,
         `Tool:\n${tool.name} — ${tool.description}`,
-        context.action?.objective === undefined ? '' : `Objective of this call:\n${context.action.objective}`,
-        context.action?.awaitingInput === undefined
-          ? ''
-          : `Input of this tool's action awaiting the user's confirmation:\n${JSON.stringify(context.action.awaitingInput)}\n` +
-            'If the user confirmed it unchanged, return exactly this input.',
-        context.currentGoal === undefined
-          ? ''
-          : [
-              `Current goal: ${context.currentGoal.id} — ${context.currentGoal.objective}`,
-              `Task constraints: ${context.taskState?.constraints.length === 0 ? 'None.' : context.taskState?.constraints.join('; ')}`,
-              `Goal constraints: ${context.currentGoal.constraints.length === 0 ? 'None.' : context.currentGoal.constraints.join('; ')}`,
-              `Completion criteria: ${context.currentGoal.completionCriteria}`,
-              `Evidence references: ${context.currentGoal.evidence.length === 0 ? 'None.' : context.currentGoal.evidence.join(', ')}`,
-            ].join('\n'),
-        `Task state:\n${digestPlan(context.taskState, context.state.stepStatuses)}`,
+        context.stepId === undefined ? '' : `Current plan step: ${context.stepId}`,
+        `Plan:\n${digestPlan(context.plan, context.state.stepStatuses)}`,
         `Evidence:\n${digestObservations(context.state.observations)}`,
       ]
         .filter(line => line.length > 0)
@@ -819,57 +454,32 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
 
   // --- context ----------------------------------------------------------
 
-  #agentContext(action: Extract<NextAction, { type: 'tool' }> | undefined): AgentContext {
+  #agentContext(stepId: string | undefined): AgentContext {
     const conversation = [...this.#originalMessages];
-    const awaiting =
-      action === undefined
-        ? undefined
-        : awaitingConfirmation(this.#turn.conversation).findLast(held => held.tool === action.tool);
     return {
       instructions: this.#definition.instructions,
       request: this.#request,
       conversation,
       messages: projectMessages(conversation),
       state: this.#turn.state,
-      taskState: this.#turn.plan,
       plan: this.#turn.plan,
-      goalId: action?.stepId,
-      stepId: action?.stepId,
-      currentGoal: this.#turn.plan?.goals.find(goal => goal.id === action?.stepId),
-      planStep: this.#turn.plan?.goals.find(goal => goal.id === action?.stepId),
-      action:
-        action === undefined
-          ? undefined
-          : {
-              tool: action.tool,
-              ...(action.objective === undefined ? {} : { objective: action.objective }),
-              ...(action.evidence === undefined ? {} : { evidence: action.evidence }),
-              ...(awaiting === undefined ? {} : { awaitingInput: awaiting.input }),
-            },
+      stepId,
       abortSignal: this.#abort.signal,
       generateText: this.#generation.generateText,
       generateObject: this.#generation.generateObject,
     };
   }
 
-  async #availableTools(includePlanning = false): Promise<AvailableTool[]> {
+  async #availableTools(): Promise<AvailableTool[]> {
     const context = this.#agentContext(undefined);
     const tools: AvailableTool[] = [];
-    // A tool whose call awaits the user's confirmation cannot proceed this turn; asking the
-    // user can. Other tools stay available for work that does not depend on it.
-    const awaiting = new Set(
-      this.#turn.state.blockers.filter(blocker => blocker.kind === 'needs_confirmation').map(blocker => blocker.tool),
-    );
     for (const tool of this.#definition.registry.values()) {
-      if (tool.name === this.#definition.planningTool && !includePlanning) continue;
-      if (awaiting.has(tool.name)) continue;
       if (tool.available !== undefined && !(await tool.available(context))) continue;
       tools.push({
         name: tool.name,
         description: tool.description,
         risk: tool.risk,
         isPlanningTool: tool.name === this.#definition.planningTool,
-        required: await requiredParameters(tool),
       });
     }
     return tools;
@@ -895,94 +505,28 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     this.#turn.finishMessage(outcome);
   }
 
-  /**
-   * Writes the turn's reply and holds it to the responder's contract: plain text with no
-   * tool-call markup, which the user would otherwise receive as if it were an answer. When
-   * the controller can review replies, it also checks that the reply addresses the request
-   * and claims only supported outcomes. A failed check gets one repair with the problem as
-   * feedback; a reply that still breaks the contract is replaced by a status response.
-   */
   async #respond(outcome: StopReason): Promise<string> {
-    const responder = this.#definition.respond ?? defaultRespond;
-    let feedback: string | undefined;
-    let fallback: string | undefined;
+    const context = {
+      request: this.#request,
+      instructions: this.#definition.instructions,
+      stopReason: outcome,
+      state: this.#turn.state,
+      plan: this.#turn.plan,
+      conversation: [...this.#originalMessages],
+      abortSignal: this.#abort.signal,
+      generateText: this.#generation.generateText,
+    };
 
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      let text: string;
-      try {
-        const result = await responder({
-          request: this.#request,
-          instructions: this.#definition.instructions,
-          stopReason: outcome,
-          state: this.#turn.state,
-          taskState: this.#turn.plan,
-          plan: this.#turn.plan,
-          conversation: [...this.#originalMessages],
-          abortSignal: this.#abort.signal,
-          generateText: this.#generation.generateText,
-          feedback,
-        });
-        text = result.text.trim();
-      } catch (error) {
-        if (isAbortError(error)) return statusResponse('cancelled', this.#turn.state);
-        return fallback ?? statusResponse(outcome, this.#turn.state);
-      }
-
-      const broken = contractViolation(text);
-      const problem = broken ?? (await this.#reviewReply(text, outcome));
-      if (problem === undefined) return text;
-      // A reply that meets the contract but falls short on content is still sendable.
-      if (broken === undefined) fallback = text;
-      this.#turn.recordTransition('response-repair', problem);
-      feedback = problem;
-    }
-
-    return fallback ?? statusResponse(outcome, this.#turn.state);
-  }
-
-  async #reviewReply(text: string, outcome: StopReason): Promise<string | undefined> {
-    const controller = this.#definition.controller;
-    if (controller.reviewReply === undefined || outcome === 'cancelled') return undefined;
     try {
-      const context = this.#turn.decisionContext(undefined, await this.#availableTools());
-      const review = await controller.reviewReply(context, text);
-      if (review.usage !== undefined) this.#turn.accountController(review.usage);
-      const floor = this.#policy.inferredConfidenceFloor;
-      const problems: string[] = [];
-      if (!review.addressesRequest.value && review.addressesRequest.confidence >= floor) {
-        problems.push(
-          'It does not address everything the user asked in their latest message. Answer each part using ' +
-            'the tool results, or say plainly which part cannot be done and why.',
-        );
-      }
-      if (!review.supported.value && review.supported.confidence >= floor) {
-        problems.push('It states outcomes the tool results do not support. State only what the results show.');
-      }
-      return problems.length === 0 ? undefined : `The previous draft was rejected. ${problems.join(' ')}`;
+      const responder = this.#definition.respond ?? defaultRespond;
+      const result = await responder(context);
+      const text = result.text.trim();
+      return text.length > 0 ? text : statusResponse(outcome, this.#turn.state);
     } catch (error) {
-      if (isAbortError(error)) throw error;
-      return undefined;
+      if (isAbortError(error)) return statusResponse('cancelled', this.#turn.state);
+      return statusResponse(outcome, this.#turn.state);
     }
   }
-}
-
-// Special-token and tool-call syntax from model chat templates. A reply is text for the user;
-// it cannot call tools, so any of this means the model tried to and the reply is not an answer.
-const toolCallMarkup = [
-  /<\/?[|｜][^<>\n]{0,48}[|｜]/,
-  /<\/?\s*(tool_call|tool_calls|function_calls?|invoke|tool_use|parameter)\b/i,
-  /\{\s*"(name|tool)"\s*:\s*"[^"]+"\s*,\s*"(arguments|parameters|input)"\s*:/,
-];
-
-function contractViolation(text: string): string | undefined {
-  if (text.length === 0) return 'The previous draft was empty. Write the reply to the user.';
-  if (toolCallMarkup.some(pattern => pattern.test(text))) {
-    return (
-      'The previous draft contained tool-call markup. This message cannot call tools; nothing it contains ' +
-      'is executed. Write only plain text for the user, based on the tool results already available.'
-    );
-  }
-  return undefined;
 }
 
 export interface RespondContext {
@@ -990,14 +534,10 @@ export interface RespondContext {
   instructions: string;
   stopReason: StopReason;
   state: Readonly<ExecutionState>;
-  taskState: Plan | undefined;
-  /** @deprecated Use taskState. */
   plan: Plan | undefined;
   conversation: AgentMessage[];
   abortSignal: AbortSignal;
   generateText: GenerationHost['generateText'];
-  /** Why the previous draft was rejected, when this is a repair. */
-  feedback?: string;
 }
 
 export type RespondAdapter = (context: RespondContext) => Promise<{ text: string }>;
@@ -1018,14 +558,11 @@ const defaultRespond: RespondAdapter = async context => {
       'You write the final message of an agent turn. You have no tools.',
       'Report only what the evidence supports. Never claim work that was not done.',
       outcomeGuidance[context.stopReason],
-      context.feedback ?? '',
-    ]
-      .filter(line => line.length > 0)
-      .join('\n'),
+    ].join('\n'),
     prompt: [
       `Original request:\n${context.request}`,
       `Outcome: ${context.stopReason}`,
-      `Task state:\n${digestPlan(context.taskState, context.state.stepStatuses)}`,
+      `Plan:\n${digestPlan(context.plan, context.state.stepStatuses)}`,
       `Evidence:\n${digestObservations(context.state.observations)}`,
       context.state.blockers.length === 0
         ? ''

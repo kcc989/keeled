@@ -7,8 +7,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bun test",
     "demo": "bun run examples/chat/src/demo.ts",
-    "check": "bun run typecheck && bun test",
-    "tau3": "bun run examples/tau-bridge/src/run.ts"
+    "check": "bun run typecheck && bun test"
   },
   "devDependencies": {
     "@types/bun": "^1.3.0",
