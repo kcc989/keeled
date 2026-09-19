@@ -1,4 +1,4 @@
-import { wrapLanguageModel, type LanguageModel } from 'ai';
+import { type LanguageModel } from 'ai';
 import {
   createAgent,
   evidenceTool,
@@ -88,22 +88,23 @@ export class Session {
     const trace = (entry: TraceEntry) => this.#trace.push(entry);
     this.#agent = createAgent({
       instructions: options.instructions,
-      taskTracker: options.trackTasks === false ? undefined : modelTaskTracker(),
+      taskTracker: options.trackTasks === false ? undefined : modelTaskTracker({ extractionModel: options.argumentsModel }),
       controller: observe(options.controller, trace, decision => this.#decisions.push(logOf(decision))),
-      model: timed(options.model, trace),
+      model: options.model,
+      onGeneration: entry => trace({ kind: 'generate', ms: entry.ms, detail: entry }),
       tools: {
         ...bridgeTools(
           options.tools,
           (call, signal) => this.#requestTool(call, signal),
-          options.argumentsModel === undefined ? undefined : timed(options.argumentsModel, trace),
-          options.writeArgumentsModel === undefined ? undefined : timed(options.writeArgumentsModel, trace),
+          options.argumentsModel === undefined ? undefined : options.argumentsModel,
+          options.writeArgumentsModel === undefined ? undefined : options.writeArgumentsModel,
         ),
         evidence: evidenceTool(),
         arithmetic: evidenceCalculationTool(),
       },
       respond: respondWith(
         options.tools,
-        options.argumentsModel === undefined ? undefined : timed(options.argumentsModel, trace),
+        options.argumentsModel === undefined ? undefined : options.argumentsModel,
       ),
       policy: options.policy,
     });
@@ -216,30 +217,6 @@ function observe(
           },
         }),
   };
-}
-
-function timed(model: LanguageModel, trace: (entry: TraceEntry) => void): LanguageModel {
-  if (typeof model === 'string') return model;
-  return wrapLanguageModel({
-    model: model as Parameters<typeof wrapLanguageModel>[0]['model'],
-    middleware: {
-      specificationVersion: 'v3',
-      async wrapGenerate({ doGenerate, params }) {
-        const started = performance.now();
-        const result = await doGenerate();
-        trace({
-          kind: 'generate',
-          ms: Math.round(performance.now() - started),
-          detail: {
-            structured: params.responseFormat?.type === 'json',
-            outputTokens: result.usage.outputTokens.total,
-            reasoningTokens: result.usage.outputTokens.reasoning,
-          },
-        });
-        return result;
-      },
-    },
-  });
 }
 
 function logOf(decision: ControllerDecision): DecisionLog {

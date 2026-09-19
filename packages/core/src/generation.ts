@@ -14,6 +14,7 @@ export interface GenerationHostOptions {
   usage: UsageTotals;
   abortSignal: AbortSignal;
   timeoutMs?: number | undefined;
+  onGeneration?: (trace: import('./types.ts').GenerationTrace) => void;
 }
 
 export class GenerationHost implements ManagedGeneration {
@@ -24,7 +25,7 @@ export class GenerationHost implements ManagedGeneration {
   }
 
   generateText = async (options: ModelCallOptions): Promise<GeneratedTextResult> => {
-    const result = await generateText(this.#callOptions(options));
+    const result = await this.#tracked(options, false, () => generateText(this.#callOptions(options)));
     this.#account(result.totalUsage);
     return { text: result.text, finishReason: result.finishReason };
   };
@@ -33,16 +34,32 @@ export class GenerationHost implements ManagedGeneration {
     options: ModelCallOptions & { schema: any; name?: string; description?: string },
   ): Promise<GeneratedObjectResult<OBJECT>> => {
     const { schema, name, description, ...rest } = options;
-    const result = await generateText({
+    const result = await this.#tracked({ ...rest, purpose: options.purpose ?? name }, true, () => generateText({
       ...this.#callOptions(rest),
       output: Output.object<OBJECT>({ schema, name, description }),
-    });
+    }));
     this.#account(result.totalUsage);
     if (result.output === undefined) {
       throw new HarnessError('Structured generation produced no object.');
     }
     return { object: result.output, text: result.text };
   };
+
+  async #tracked<T extends { totalUsage: { inputTokens?: number; outputTokens?: number; outputTokenDetails?: { reasoningTokens?: number } } }>(options: ModelCallOptions, structured: boolean, run: () => Promise<T>): Promise<T> {
+    const start = performance.now();
+    const emit = (detail: Partial<import('./types.ts').GenerationTrace>) => {
+      try { this.#options.onGeneration?.({ purpose: options.purpose ?? (structured ? 'structured' : 'response'), structured, ms: Math.round(performance.now() - start), status: 'success', ...detail }); } catch { /* Diagnostics must not change execution. */ }
+    };
+    try {
+      mergeSignals(this.#options.abortSignal, options.abortSignal).throwIfAborted();
+      const result = await run();
+      emit({ inputTokens: result.totalUsage.inputTokens, outputTokens: result.totalUsage.outputTokens, reasoningTokens: result.totalUsage.outputTokenDetails?.reasoningTokens });
+      return result;
+    } catch (error) {
+      emit({ status: 'error', error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+  }
 
   #callOptions(options: ModelCallOptions) {
     const signal = mergeSignals(this.#options.abortSignal, options.abortSignal);

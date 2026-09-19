@@ -189,7 +189,13 @@ export type AgentMessage<TOOLS extends UIToolProjection = UIToolProjection> = UI
 
 export type UIToolProjection = Record<string, { input: unknown; output: unknown }>;
 
+export interface GenerationTrace {
+  purpose: string; structured: boolean; ms: number; status: 'success' | 'error';
+  inputTokens?: number; outputTokens?: number; reasoningTokens?: number; error?: string;
+}
+
 export interface ModelCallOptions {
+  purpose?: string;
   model?: LanguageModel;
   system?: string;
   prompt?: string;

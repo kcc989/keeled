@@ -9,6 +9,7 @@ import type { AgentMessage, AgentPolicy, AgentResult, ResolvedPolicy, Risk } fro
 export interface AgentConfig<TOOLS extends AgentToolSet> {
   instructions: string;
   taskTracker?: TaskTracker;
+  onGeneration?: (trace: import('./types.ts').GenerationTrace) => void;
   controller: Controller;
   model: LanguageModel;
   tools: TOOLS;
@@ -27,6 +28,7 @@ export interface RunOptions {
 export interface AgentDefinition<TOOLS extends AgentToolSet> {
   instructions: string;
   taskTracker?: TaskTracker;
+  onGeneration?: (trace: import('./types.ts').GenerationTrace) => void;
   controller: Controller;
   model: LanguageModel;
   argumentsModel?: LanguageModel;
@@ -72,6 +74,7 @@ export function compileDefinition<TOOLS extends AgentToolSet>(
   return {
     instructions: config.instructions,
     taskTracker: config.taskTracker,
+    onGeneration: config.onGeneration,
     controller: config.controller,
     model: config.model,
     argumentsModel: config.argumentsModel,

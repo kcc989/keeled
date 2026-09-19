@@ -293,3 +293,13 @@ it does not infer aliases or relationships between records. The bridge uses this
 provider for every read tool without domain-specific tool mappings. Unsupported schemas
 or incomplete records use normal argument resolution. Matching fields propose a call;
 they do not prove that the call is appropriate or authorized.
+
+
+Generation diagnostics are available through `onGeneration`: purpose, duration, status,
+input/output/reasoning tokens, and errors. Built-in purposes distinguish task extraction,
+completion verification, tool input, permission verification, and final responses. Diagnostics
+do not change execution if the observer throws. The bridge saves these in each turn's trace.
+`modelTaskTracker({ extractionModel })` can use a non-reasoning model for bounded task
+extraction while keeping the default model for completion verification. The bridge uses
+its existing fast argument model for this extraction. Evidence reads normalize page defaults
+and reject identical repeats within a turn; different pages remain available.

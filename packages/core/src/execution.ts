@@ -240,6 +240,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     });
     this.#generation = new GenerationHost({
       defaultModel: definition.model,
+      onGeneration: definition.onGeneration,
       usage,
       abortSignal: this.#abort.signal,
       timeoutMs: this.#policy.generationTimeoutMs,
@@ -647,7 +648,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       .join('\n');
     const result = await this.#generation.generateObject<PermissionVerdict>({
       schema: permissionSchema,
-      name: 'permission',
+      name: 'permission', purpose: 'permission',
       system:
         'You decide whether an agent may take one action now under its instructions. First identify the ' +
         'conditions the instructions set for this kind of action; rules about other kinds of action do not ' +
@@ -677,7 +678,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     }
     const result = await this.#generation.generateObject<unknown>({
       schema: tool.inputSchema,
-      name: tool.name,
+      name: tool.name, purpose: 'tool_input',
       description: tool.description,
       model: tool.model ?? this.#definition.argumentsModel ?? this.#definition.model,
       system:
@@ -900,6 +901,7 @@ const outcomeGuidance: Record<StopReason, string> = {
 
 const defaultRespond: RespondAdapter = async context => {
   const result = await context.generateText({
+    purpose: 'response',
     system: [
       context.instructions,
       'You write the final message of an agent turn. You have no tools.',

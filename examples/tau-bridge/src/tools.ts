@@ -143,7 +143,7 @@ async function resolveInput(
   const { object } = await context.generateObject<Resolution>({
     model,
     schema: resolutionSchema(spec.parameters),
-    name: spec.name,
+    name: spec.name, purpose: 'tool_input',
     description: spec.description,
     system:
       'You produce the input for a single tool call, or report that you cannot. Use only values stated in the ' +
@@ -245,6 +245,7 @@ export function respondWith(specs: readonly ToolSpec[], draftModel?: LanguageMod
   const catalog = specs.map(spec => `- ${spec.name}(${inputs(spec)}): ${describe(spec)}`).join('\n');
   return async context => {
     const result = await context.generateText({
+      purpose: 'response',
       ...(draftModel !== undefined ? { model: draftModel } : {}),
       system: [
         context.instructions,

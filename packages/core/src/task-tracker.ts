@@ -1,13 +1,13 @@
-import { jsonSchema } from 'ai';
+import { jsonSchema, type LanguageModel } from 'ai';
 import { callHistory } from './projection.ts';
 import type { TaskPatch, GoalEvidence, TaskTracker } from './task.ts';
 
 /** One additive update per user message, not a planner on every tool-selection cycle. */
-export function modelTaskTracker(): TaskTracker {
+export function modelTaskTracker(options: { extractionModel?: LanguageModel } = {}): TaskTracker {
   return {
     async update(context) {
       const result = await context.generateObject<TaskPatch>({
-        name: 'task_update',
+        name: 'task_update', purpose: 'task_extract', model: options.extractionModel, maxOutputTokens: 2048,
         schema: jsonSchema({ type: 'object', properties: {
           goals: { type: 'array', items: { type: 'object', properties: {
             id: { type: 'string' }, text: { type: 'string' }, quote: { type: 'string' }, requiresWrite: { type: 'boolean' },
@@ -31,7 +31,7 @@ export function modelTaskTracker(): TaskTracker {
     },
     async verify(context) {
       const result = await context.generateObject<{ checks: GoalEvidence[] }>({
-        name: 'goal_evidence',
+        name: 'goal_evidence', purpose: 'completion_verify',
         schema: jsonSchema({ type: 'object', properties: { checks: { type: 'array', items: {
           type: 'object', properties: { id: { type: 'string' }, complete: { type: 'boolean' }, evidence: { type: 'array', items: { type: 'string' } } },
           required: ['id', 'complete', 'evidence'],

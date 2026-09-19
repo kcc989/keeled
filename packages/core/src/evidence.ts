@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { agentTool, type AgentTool } from './tool.ts';
 import { callHistory } from './projection.ts';
 
-const evidenceInputSchema = z.object({
+const rawEvidenceSchema = z.object({
   ref: z.string().describe('The reference of an earlier tool result, as shown in the call history.'),
   path: z
     .string()
@@ -20,7 +20,8 @@ const evidenceInputSchema = z.object({
   order: z.enum(['asc', 'desc']).optional(),
 });
 
-type EvidenceInput = z.infer<typeof evidenceInputSchema>;
+type EvidenceInput = z.infer<typeof rawEvidenceSchema>;
+const evidenceInputSchema = rawEvidenceSchema.transform((input): EvidenceInput => ({ ...input, page: input.page ?? 1, pageSize: input.pageSize ?? 10, order: input.order ?? 'asc' }));
 
 export interface EvidencePage {
   ref: string;
@@ -48,6 +49,7 @@ export function evidenceTool(): AgentTool<EvidenceInput, EvidencePage> {
       'full result. Use it when the call history shows a result only in part, or to rank all candidates.',
     inputSchema: evidenceInputSchema,
     risk: 'read',
+    repeat: 'reuse',
     execute: (input, context): EvidencePage => {
       const call = callHistory(context.conversation, context.state.observations).find(
         record => record.ref === input.ref,
