@@ -9,6 +9,10 @@ const resultBudget = 4_000;
 export function controllerState(context: ControllerContext): { [key: string]: JsonValue } {
   return {
     latest_user_message: context.request,
+    task: context.state.task,
+    application_inspections: context.state.inspections,
+    tool_catalog: context.toolCatalog ?? context.availableTools,
+    uncertain_operations: context.state.uncertainOperations,
     agent_instructions: context.instructions,
     // Tool calls in the order they were made, each with its reference, input, and result.
     // A large result appears as a page of complete records with its omissions stated.
@@ -49,8 +53,7 @@ export function controllerState(context: ControllerContext): { [key: string]: Js
         message.parts
           .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
           .map(part => ({ role: message.role, text: part.text })),
-      )
-      .slice(-10),
+      ),
   } as unknown as { [key: string]: JsonValue };
 }
 

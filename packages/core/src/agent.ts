@@ -1,3 +1,4 @@
+import type { TaskTracker } from './task.ts';
 import type { LanguageModel } from 'ai';
 import { ConfigurationError } from './errors.ts';
 import { AgentExecution, type RespondAdapter } from './execution.ts';
@@ -7,6 +8,8 @@ import type { AgentMessage, AgentPolicy, AgentResult, ResolvedPolicy, Risk } fro
 
 export interface AgentConfig<TOOLS extends AgentToolSet> {
   instructions: string;
+  taskTracker?: TaskTracker;
+  onGeneration?: (trace: import('./types.ts').GenerationTrace) => void;
   controller: Controller;
   model: LanguageModel;
   tools: TOOLS;
@@ -24,6 +27,8 @@ export interface RunOptions {
 
 export interface AgentDefinition<TOOLS extends AgentToolSet> {
   instructions: string;
+  taskTracker?: TaskTracker;
+  onGeneration?: (trace: import('./types.ts').GenerationTrace) => void;
   controller: Controller;
   model: LanguageModel;
   argumentsModel?: LanguageModel;
@@ -68,6 +73,8 @@ export function compileDefinition<TOOLS extends AgentToolSet>(
 
   return {
     instructions: config.instructions,
+    taskTracker: config.taskTracker,
+    onGeneration: config.onGeneration,
     controller: config.controller,
     model: config.model,
     argumentsModel: config.argumentsModel,
@@ -79,6 +86,7 @@ export function compileDefinition<TOOLS extends AgentToolSet>(
       repeatLimit,
       toolTimeoutMs: policy.toolTimeoutMs,
       generationTimeoutMs: policy.generationTimeoutMs,
+      turnTimeoutMs: policy.turnTimeoutMs,
       allowedRisks: new Set(policy.allowedRisks ?? defaultRisks),
       authorization: { risks: new Set(authorization.risks ?? defaultAuthorizeRisks), ...floors },
       inferredConfidenceFloor: floor,

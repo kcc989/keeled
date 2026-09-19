@@ -39,8 +39,8 @@ stores them in `AssistantMessage.raw_data.keeled.decisions`, so they appear in t
 trajectory.
 
 The session also registers Keeled's `evidence` tool. It runs locally over stored results
-and is never sent to τ³, so it can page or rank a large result, such as every connecting
-flight by total business fare, without another environment call.
+and is never sent to τ³, so it can page or rank a large result, such as every product bundle
+by total component price, without another environment call.
 
 Tool input is generated with a schema that lets the model answer `missing` instead of
 arguments; that becomes a `missing_evidence` blocker rather than invented values.
@@ -48,6 +48,16 @@ arguments; that becomes a `missing_evidence` blocker rather than invented values
 Tool input and the final response are generated with the whole conversation in view
 (`resolveInput` and `respond` in `src/tools.ts`), because τ³ conversations span several
 turns. The bridge also supplies the benchmark tool catalog and risk-specific argument models.
+
+## Ready read calls
+
+The bridge uses the core `schemaReadCandidates` provider for all read tools. It projects
+exactly matching property names from a single observed object and validates the entire
+input schema. It never joins separate records, inherits parent fields, translates aliases,
+or interprets tool names. Incomplete and ambiguous relationships use normal input resolution.
+Candidates carry source references. Mutations and unknown-risk calls invalidate earlier
+sources; successful identical reads are omitted in the current turn. Candidate enumeration
+is bounded to 100 calls and depth 20; ordinary input resolution remains available.
 
 ## Endpoints
 
@@ -65,13 +75,12 @@ An event is `{ type: 'tool_call', id, name, arguments, decisions }` or
 
 ```sh
 bun run tau3 mock
-bun run tau3 airline --num-tasks 5
-bun run tau3 airline --task-ids 0 1 2 --max-concurrency 1
+bun run tau3 <domain> --num-tasks 5
+bun run tau3 <domain> --task-ids 0 1 2 --max-concurrency 1
 ```
 
 `tau3` starts the bridge, runs `tau2 run --domain <domain> --agent keeled` in the τ³-bench
-checkout, and stops the bridge. Any other `tau2 run` option passes through. `mock` and
-`airline` are tested; other domains run with a warning. The default is **one trial per task**;
+checkout, and stops the bridge. Any other `tau2 run` option passes through. The domain is passed through without special handling. The default is **one trial per task**;
 keep screening runs at one trial until a promising change warrants a larger evaluation.
 
 | Variable | Where | Purpose |
@@ -99,19 +108,19 @@ Structured tool input is requested with `strictJsonSchema: false`, because τ³ 
 use optional fields and open objects (`$defs`, `anyOf` with `additionalProperties`) that
 strict mode rejects.
 
-## Simplified-loop screen
+## Historical measurements
 
-Airline tasks 0–9, one trial per task, seed 300, concurrency 3, 300-second timeout,
-zero retries. Agent: DeepSeek v4.1 Flash via Together/Modal; user: GPT-4.1.
+The earlier candidate experiment used a domain-specific adapter. That adapter has been
+removed. Its saved results do not establish the performance of the general framework or
+the new schema-based candidate provider. Raw historical run artifacts remain unchanged.
+No new benchmark was run for this replacement.
 
-| Version | Successes | Mean seconds/task |
-| --- | ---: | ---: |
-| PR #5 (`f31c283`) | 9/10 | 121.4 |
-| Simplified loop (`4527d35`) | 8/10 | 62.2 |
+## Generic harness changes after the snapshot
 
-Both runs had zero errors and timeouts. This single screen shows a speed/accuracy tradeoff,
-not an established improvement. Both failed task 7; the simplified loop also failed task 8
-with repeated reservation lookups and no booking. Structured model calls were 335 versus
-350, so removing planning did not eliminate argument-resolution loops. The production
-source in this PR matches the tested simplified loop. Raw experiment files are excluded
-from the PR; the runner above remains available for future screens.
+The snapshot results above predate the current changes and do not measure them.
+Sessions now use the reusable task tracker and evidence calculation tool. Tests can disable
+the tracker with `trackTasks: false`. The framework has no domain-specific policy, pricing, or ownership rules.
+
+The stock server runs with the same generic instruction, evidence, and confirmation checks
+as any other host. There is no domain adapter or host access callback. Model permission
+checks do not establish authenticated identity.

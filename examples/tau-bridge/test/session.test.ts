@@ -27,7 +27,7 @@ const tools: ToolSpec[] = [
 function session(decisions: Parameters<typeof scriptedController>[0]['decisions']) {
   const controller = scriptedController({ decisions });
   const model = stubModel({ text: 'Created.', objects: [{ status: 'ready', arguments: { user_id: 'user_1', title: 'Meeting' } }] });
-  return { controller, session: new Session({ instructions: policy, tools, controller, model }) };
+  return { controller, session: new Session({ trackTasks: false, instructions: policy, tools, controller, model }) };
 }
 
 describe('tau bridge session', () => {
@@ -82,7 +82,7 @@ describe('tau bridge session', () => {
       text: prompt => (prompt.includes('task_9') ? 'Grounded.' : 'Ungrounded.'),
       objects: [{ status: 'ready', arguments: { user_id: 'user_1', title: 'Meeting' } }],
     });
-    const s = new Session({ instructions: policy, tools, controller, model });
+    const s = new Session({ trackTasks: false, instructions: policy, tools, controller, model });
 
     const call = await s.sendUser('Create a task called Meeting for user_1.');
     await s.sendToolResult({ id: call.type === 'tool_call' ? call.id : '', content: '{"task_id":"task_9"}' });
@@ -113,7 +113,7 @@ describe('tau bridge session', () => {
     );
 
     const controller = scriptedController({ decisions: [{ type: 'respond', outcome: 'needs_input' }] });
-    const s = new Session({
+    const s = new Session({ trackTasks: false,
       instructions: policy,
       tools: [{ ...tools[0]!, returns: usersReturn }, tools[1]!],
       controller,
@@ -131,12 +131,12 @@ describe('tau bridge session', () => {
       text: prompt =>
         prompt.includes('create_task(user_id, title)') && !prompt.includes('You have no tools') ? 'Aware.' : 'Unaware.',
     });
-    const s = new Session({ instructions: policy, tools, controller, model });
+    const s = new Session({ trackTasks: false, instructions: policy, tools, controller, model });
     expect(await s.sendUser('Make a task.')).toMatchObject({ type: 'message', text: 'Aware.' });
   });
 
   test('prompts see a long tool result in full, including its last field', async () => {
-    const long = { user_id: 'user_1', padding: 'p'.repeat(900), reservations: ['MZDDS4', 'Q69X3R'] };
+    const long = { user_id: 'user_1', padding: 'p'.repeat(900), documents: ['MZDDS4', 'Q69X3R'] };
     const controller = scriptedController({
       decisions: [
         { type: 'tool', tool: 'get_users' },
@@ -150,8 +150,8 @@ describe('tau bridge session', () => {
         return 'Done.';
       },
     });
-    const s = new Session({ instructions: policy, tools, controller, model });
-    const call = await s.sendUser('Which reservations do I have?');
+    const s = new Session({ trackTasks: false, instructions: policy, tools, controller, model });
+    const call = await s.sendUser('Which documents do I have?');
     const final = await s.sendToolResult({ id: call.type === 'tool_call' ? call.id : '', content: JSON.stringify(long) });
     expect(final).toMatchObject({ type: 'message', text: 'Done.' });
     expect(prompts.at(-1)).toContain('Q69X3R');
@@ -168,7 +168,7 @@ describe('tau bridge session', () => {
       text: 'Which user is the task for?',
       objects: [{ status: 'missing', missing: 'the user id, from the user' }],
     });
-    const s = new Session({ instructions: policy, tools, controller, model });
+    const s = new Session({ trackTasks: false, instructions: policy, tools, controller, model });
     const reply = await s.sendUser('Create a task called Meeting.');
     expect(reply).toMatchObject({ type: 'message', stopReason: 'needs_input' });
     const blockers = s.messages.flatMap(m => m.parts).filter(p => p.type === 'data-blocker');
@@ -181,7 +181,7 @@ describe('tau bridge session', () => {
     const controller = scriptedController({ decisions: [{ type: 'respond', outcome: 'needs_input' }] });
     const fast = stubModel({ text: '<｜DSML｜ invoke name="get_users">' });
     const careful = stubModel({ text: 'Which task should I create?' });
-    const s = new Session({ instructions: policy, tools, controller, model: careful, argumentsModel: fast });
+    const s = new Session({ trackTasks: false, instructions: policy, tools, controller, model: careful, argumentsModel: fast });
     const event = await s.sendUser('Help me.');
     expect(event).toMatchObject({ type: 'message', text: 'More information is needed before this request can continue.' });
     expect(event.trace.filter(entry => entry.kind === 'generate')).toHaveLength(1);

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createAgent } from '../src/agent.ts';
+import { createTestAgent as createAgent } from './fixtures.ts';
 import { scriptedController, stubModel, userMessage } from '../src/testing.ts';
 import { searchTool } from './fixtures.ts';
 

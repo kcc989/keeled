@@ -2,7 +2,6 @@
  * Starts the bridge, runs one τ³-bench domain against it, and stops the bridge.
  *
  *   bun run tau3 <domain> [tau2 run options...]
- *   bun run tau3 airline --num-tasks 5
  *
  * TAU2_DIR points at the τ³-bench checkout (default ~/projects/tau2-bench).
  * TAU2_USER_LLM sets the user simulator (default openrouter/openai/gpt-4.1).
@@ -10,13 +9,11 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-const tested = ['mock', 'airline'];
 const [domain, ...rest] = Bun.argv.slice(2);
 if (domain === undefined || domain.startsWith('-')) {
-  console.error(`Usage: bun run tau3 <domain> [tau2 run options...]   (tested: ${tested.join(', ')})`);
+  console.error(`Usage: bun run tau3 <domain> [tau2 run options...]`);
   process.exit(1);
 }
-if (!tested.includes(domain)) console.warn(`Domain "${domain}" has not been tested with this bridge.`);
 
 const tau2Dir = process.env['TAU2_DIR'] ?? join(homedir(), 'projects', 'tau2-bench');
 const tau2 = join(tau2Dir, '.venv', 'bin', 'tau2');

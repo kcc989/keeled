@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { z } from 'zod';
-import { createAgent } from '../src/agent.ts';
+import { createTestAgent as createAgent } from './fixtures.ts';
 import { agentTool } from '../src/tool.ts';
 import { scriptedController, stubModel, userMessage } from '../src/testing.ts';
 import type { ControllerContext } from '../src/controller.ts';
@@ -40,13 +40,15 @@ function fullRun() {
 }
 
 describe('simple loop', () => {
-  test('selects tools, handles a failure, and answers without planning', async () => {
+  test('selects tools and stops further writes after an uncertain failure', async () => {
     const { agent } = fullRun();
     const result = await agent.run({ messages: [userMessage('Rename the exported helper.')] });
 
-    expect(result.stopReason).toBe('completed');
+    expect(result.stopReason).toBe('blocked');
+    expect(result.state.uncertainOperations).toHaveLength(1);
+    expect(result.state.observations.filter(o => o.kind === 'tool-result' && o.tool === 'editFile')).toHaveLength(0);
 
-    expect(result.text).toContain('applied');
+    expect(result.text.length).toBeGreaterThan(0);
 
     const parts = result.messages.at(-1)?.parts ?? [];
     const decisions = parts.filter(part => part.type === 'data-decision');
@@ -191,7 +193,7 @@ describe('termination paths', () => {
     expect(result.steps).toBeLessThan(20);
   });
 
-  test('different resolved inputs are different attempts even when none can run', async () => {
+  test('invalid resolution is suspended rather than regenerated against unchanged evidence', async () => {
     let index = 0;
     const lookup = agentTool({
       description: 'Look up one record.',
@@ -220,8 +222,8 @@ describe('termination paths', () => {
     const result = await agent.run({ messages: [userMessage('Inspect four records.')] });
 
     expect(result.stopReason).toBe('blocked');
-    expect(index).toBe(4);
-    expect(result.state.blockers.filter(blocker => blocker.kind === 'no_progress')).toHaveLength(0);
+    expect(index).toBe(1);
+    expect(result.state.blockers.some(blocker => blocker.kind === 'no_progress')).toBe(true);
   });
 
   test('cancellation stops work and preserves partial text', async () => {
@@ -251,7 +253,7 @@ describe('termination paths', () => {
     });
 
     expect(result.stopReason).toBe('cancelled');
-    expect(result.text).toBe('');
+    expect(result.text).toBe('This turn was cancelled.');
   });
 
   test('selecting an unregistered tool is rejected rather than executed', async () => {

@@ -7,6 +7,8 @@ export type { RespondAdapter, RespondContext } from './execution.ts';
 export { agentTool, agentToolBrand, isAgentTool, registerTools } from './tool.ts';
 export type {
   ActionIntent,
+  CallCandidate,
+  CandidateProvider,
   AgentContext,
   AgentTool,
   AgentToolExecutionOptions,
@@ -77,6 +79,7 @@ export type {
   BlockerRecord,
   DecisionRecord,
   ExecutionState,
+  InspectionRecord,
   ManagedGeneration,
   ModelCallOptions,
   Observation,
@@ -88,3 +91,17 @@ export type {
   UsageBucket,
   UsageTotals,
 } from './types.ts';
+
+export type { UncertainOperation } from './types.ts';
+export type { TaskContract, TaskGoal, TaskItem, TaskPatch, TaskTracker, GoalEvidence } from './task.ts';
+export { emptyTask, applyTaskPatch } from './task.ts';
+export type { InputInspection } from './tool.ts';
+
+export { calculateDecimals } from './arithmetic.ts';
+export { evidenceCalculationTool } from './calculate.ts';
+
+export { modelTaskTracker } from './task-tracker.ts';
+
+export { schemaReadCandidates, type CandidateTool } from './candidates.ts';
+
+export type { GenerationTrace } from './types.ts';

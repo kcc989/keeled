@@ -1,6 +1,7 @@
 import { jsonSchema, type LanguageModel } from 'ai';
 import {
   MissingInformation,
+  schemaReadCandidates,
   agentTool,
   callHistory,
   presentResult,
@@ -55,6 +56,7 @@ export function bridgeTools(
       inputSchema: schema,
       risk: spec.risk ?? 'unknown',
       repeat: spec.repeat ?? 'allow',
+      candidates: schemaReadCandidates(spec, specs),
       resolveInput: async context => {
         const model = spec.risk === 'read' ? argumentsModel : (writeArgumentsModel ?? argumentsModel);
         return resolveInput(spec, context, model);
@@ -141,7 +143,7 @@ async function resolveInput(
   const { object } = await context.generateObject<Resolution>({
     model,
     schema: resolutionSchema(spec.parameters),
-    name: spec.name,
+    name: spec.name, purpose: 'tool_input',
     description: spec.description,
     system:
       'You produce the input for a single tool call, or report that you cannot. Use only values stated in the ' +
@@ -243,6 +245,7 @@ export function respondWith(specs: readonly ToolSpec[], draftModel?: LanguageMod
   const catalog = specs.map(spec => `- ${spec.name}(${inputs(spec)}): ${describe(spec)}`).join('\n');
   return async context => {
     const result = await context.generateText({
+      purpose: 'response',
       ...(draftModel !== undefined ? { model: draftModel } : {}),
       system: [
         context.instructions,
@@ -254,6 +257,8 @@ export function respondWith(specs: readonly ToolSpec[], draftModel?: LanguageMod
         guidance[context.stopReason],
         `Tool calls so far:\n${callLog(context.conversation, context.state.observations)}`,
         `Blockers this turn:\n${blockers(context.state.blockers)}`,
+        `Retained goals and constraints:\n${JSON.stringify(context.state.task)}`,
+        `Application-verified facts and effects (do not replace with mental arithmetic):\n${JSON.stringify(context.state.inspections)}`,
       ].join('\n\n'),
       messages: projectMessages(context.conversation),
       abortSignal: context.abortSignal,

@@ -6,7 +6,7 @@ import type { CallRecord } from './projection.ts';
  * model is involved, so building the index costs nothing and cannot invent values.
  */
 export interface Fact {
-  /** The kind of value, from the key it appeared under: `reservations[]` → `reservation`. */
+  /** The kind of value, from the key it appeared under: `documents[]` → `document`. */
   type: string;
   value: string | number;
   /** What distinguishes this value, from the other fields of the record it came from. */
@@ -81,7 +81,7 @@ export function candidatesFor(parameter: string, facts: readonly Fact[]): Fact[]
   return [...typed, ...mentioned];
 }
 
-/** `reservation_id`, `reservations`, and `reservation` are one kind of value. */
+/** `document_id`, `documents`, and `document` are one kind of value. */
 export function factType(key: string): string {
   const tokens = key
     .toLowerCase()
@@ -141,7 +141,7 @@ function describe(record: Record<string, unknown>, except: string): string {
   return text.length <= maxLabel ? text : `${text.slice(0, maxLabel)}…`;
 }
 
-// Identifiers, codes, dates, and airport codes a user might state. Plain words are left out.
+// Identifiers, codes, dates, and short codes a user might state. Plain words are left out.
 const mentionPatterns = [
   /\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/gi,
   /\b(?=[A-Z0-9]*\d)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{4,10}\b/g,

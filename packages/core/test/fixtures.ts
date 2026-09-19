@@ -1,3 +1,5 @@
+import { createAgent as createCoreAgent, type AgentConfig } from '../src/agent.ts';
+import type { AgentToolSet } from '../src/tool.ts';
 import { z } from 'zod';
 import { agentTool } from '../src/tool.ts';
 export function searchTool(results: string[] = ['src/index.ts']) {
@@ -36,3 +38,5 @@ export function testTool(passing = true) {
     execute: () => ({ passed: passing, failures: passing ? 0 : 2 }),
   });
 }
+
+export const createTestAgent = createCoreAgent;

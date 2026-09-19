@@ -1,3 +1,4 @@
+import type { TaskContract } from './task.ts';
 import type { FlexibleSchema, LanguageModel, ModelMessage, Tool, ToolSet, UIMessage } from 'ai';
 
 export type StopReason = 'completed' | 'needs_input' | 'blocked' | 'limit' | 'error' | 'cancelled';
@@ -20,6 +21,8 @@ export interface AgentPolicy {
   repeatLimit?: number;
   toolTimeoutMs?: number;
   generationTimeoutMs?: number;
+  /** Total deadline for the whole turn, including controller requests. */
+  turnTimeoutMs?: number;
   allowedRisks?: readonly Risk[];
   authorization?: AuthorizationPolicy;
   inferredConfidenceFloor?: number;
@@ -46,6 +49,7 @@ export interface ResolvedPolicy {
   repeatLimit: number;
   toolTimeoutMs: number | undefined;
   generationTimeoutMs: number | undefined;
+  turnTimeoutMs: number | undefined;
   allowedRisks: ReadonlySet<Risk>;
   authorization: {
     risks: ReadonlySet<Risk>;
@@ -104,8 +108,21 @@ export interface Blocker {
   resolution: string;
 }
 
+export interface InspectionRecord {
+  id: string;
+  tool: string;
+  input: unknown;
+  allowed: boolean;
+  reason: string;
+  facts?: Record<string, unknown>;
+  effects?: string[];
+}
+
 export interface ExecutionState {
   reducerVersion: number;
+  task: TaskContract;
+  uncertainOperations: UncertainOperation[];
+  inspections: InspectionRecord[];
   cycle: number;
   stepsUsed: number;
   observations: Observation[];
@@ -159,6 +176,9 @@ export type AgentDataParts = {
   decision: DecisionRecord;
   blocker: BlockerRecord;
   transition: TransitionRecord;
+  task: TaskContract;
+  operation: UncertainOperation;
+  inspection: InspectionRecord;
 };
 
 export type AgentMessage<TOOLS extends UIToolProjection = UIToolProjection> = UIMessage<
@@ -169,7 +189,13 @@ export type AgentMessage<TOOLS extends UIToolProjection = UIToolProjection> = UI
 
 export type UIToolProjection = Record<string, { input: unknown; output: unknown }>;
 
+export interface GenerationTrace {
+  purpose: string; structured: boolean; ms: number; status: 'success' | 'error';
+  inputTokens?: number; outputTokens?: number; reasoningTokens?: number; error?: string;
+}
+
 export interface ModelCallOptions {
+  purpose?: string;
   model?: LanguageModel;
   system?: string;
   prompt?: string;
@@ -204,3 +230,11 @@ export interface ManagedGeneration {
 export type PlainTool = Tool<any, any, any>;
 
 export type { ToolSet };
+
+export interface UncertainOperation {
+  id: string;
+  tool: string;
+  input: unknown;
+  reason: string;
+  status: 'unknown' | 'applied' | 'not_applied';
+}
