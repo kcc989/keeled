@@ -303,3 +303,11 @@ do not change execution if the observer throws. The bridge saves these in each t
 extraction while keeping the default model for completion verification. The bridge uses
 its existing fast argument model for this extraction. Evidence reads normalize page defaults
 and reject identical repeats within a turn; different pages remain available.
+
+
+## Focused argument benchmark
+
+Run `bun run microbench --mode candidates` for offline field-matching coverage, or
+`bun run microbench --mode resolver` for live argument resolution without the full
+conversation benchmark. Use `--case collection-ids,root-ref` to isolate a failure and
+`--trials 3` to sample variability. See [microbench instructions](examples/tau-bridge/src/microbench/README.md).

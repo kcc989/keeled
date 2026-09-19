@@ -2,13 +2,17 @@
   "name": "keeled",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*", "examples/*"],
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bun test",
     "demo": "bun run examples/chat/src/demo.ts",
     "check": "bun run typecheck && bun test",
-    "tau3": "bun run examples/tau-bridge/src/run.ts"
+    "tau3": "bun run examples/tau-bridge/src/run.ts",
+    "microbench": "bun run examples/tau-bridge/src/microbench/run.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.3.0",
