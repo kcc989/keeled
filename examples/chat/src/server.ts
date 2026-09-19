@@ -2,7 +2,7 @@
  * The same execution served over HTTP as an AI SDK UI message stream.
  * Run with: bun run examples/chat/src/server.ts
  */
-import { createAgent, planningTool, type AgentMessage } from '@keeled/core';
+import { createAgent, type AgentMessage } from '@keeled/core';
 import { jev } from '@keeled/jev';
 import { Repo } from './repo.ts';
 import { buildTools } from './tools.ts';
@@ -15,8 +15,8 @@ const agent = createAgent({
   instructions: 'Complete the requested change and verify the result.',
   controller: jev(),
   model: process.env['KEELED_MODEL'] ?? 'anthropic/claude-sonnet-4-5',
-  tools: { plan: planningTool(), ...buildTools(repo) },
-  planningTool: 'plan',
+  tools: buildTools(repo),
+
 });
 
 Bun.serve({

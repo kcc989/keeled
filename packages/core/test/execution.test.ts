@@ -7,40 +7,21 @@ import type { ControllerContext } from '../src/controller.ts';
 import type { AgentMessage } from '../src/types.ts';
 import {
   editTool,
-  firstPlan,
-  revisedPlan,
-  scriptedPlanner,
   searchTool,
   testTool,
 } from './fixtures.ts';
 
 const model = stubModel({ text: 'The change is applied and the tests pass.' });
 
-function succeeded(context: ControllerContext, tool: string): boolean {
-  return context.state.observations.some(
-    observation => observation.kind === 'tool-result' && observation.tool === tool,
-  );
-}
-
 function fullRun() {
   const controller = scriptedController({
     decisions: [
-      { type: 'tool', tool: 'plan' },
-      { type: 'tool', tool: 'search', stepId: 'locate' },
-      { type: 'tool', tool: 'editFile', stepId: 'edit' },
-      { type: 'tool', tool: 'plan' },
-      { type: 'tool', tool: 'editFile', stepId: 'edit' },
-      { type: 'tool', tool: 'runTests', stepId: 'verify' },
+      { type: 'tool', tool: 'search' },
+      { type: 'tool', tool: 'editFile' },
+      { type: 'tool', tool: 'editFile' },
+      { type: 'tool', tool: 'runTests' },
       { type: 'respond', outcome: 'completed' },
     ],
-    assess: context => ({
-      steps: {
-        locate: { complete: succeeded(context, 'search') },
-        edit: { complete: succeeded(context, 'editFile') },
-        verify: { complete: succeeded(context, 'runTests') },
-      },
-      goalMet: succeeded(context, 'runTests'),
-    }),
   });
 
   const agent = createAgent({
@@ -48,61 +29,36 @@ function fullRun() {
     controller,
     model,
     tools: {
-      plan: scriptedPlanner([firstPlan, revisedPlan]),
       search: searchTool(),
       editFile: editTool({ failFirst: true }),
       runTests: testTool(),
     },
-    planningTool: 'plan',
     policy: { maxSteps: 12 },
   });
 
   return { agent, controller };
 }
 
-describe('phase 1 demonstration', () => {
-  test('selects several tools, plans, revises after a failure, and answers', async () => {
+describe('simple loop', () => {
+  test('selects tools, handles a failure, and answers without planning', async () => {
     const { agent } = fullRun();
     const result = await agent.run({ messages: [userMessage('Rename the exported helper.')] });
 
     expect(result.stopReason).toBe('completed');
-    expect(result.plan?.version).toBe(2);
+
     expect(result.text).toContain('applied');
 
     const parts = result.messages.at(-1)?.parts ?? [];
     const decisions = parts.filter(part => part.type === 'data-decision');
-    const plans = parts.filter(part => part.type === 'data-plan');
+
     const toolErrors = parts.filter(
       part => part.type.startsWith('tool-') && (part as { state?: string }).state === 'output-error',
     );
 
-    expect(decisions).toHaveLength(7);
-    expect(plans).toHaveLength(2);
+    expect(decisions).toHaveLength(5);
+
     expect(toolErrors).toHaveLength(1);
-    expect(result.state.stepStatuses).toEqual({ locate: 'done', edit: 'done', verify: 'done' });
-  });
 
-  test('a simple request skips planning', async () => {
-    const controller = scriptedController({
-      decisions: [
-        { type: 'tool', tool: 'search' },
-        { type: 'respond', outcome: 'completed' },
-      ],
-      assess: context => ({ goalMet: succeeded(context, 'search') }),
-    });
-
-    const agent = createAgent({
-      instructions: 'Answer the question.',
-      controller,
-      model,
-      tools: { plan: scriptedPlanner([firstPlan]), search: searchTool() },
-      planningTool: 'plan',
-    });
-
-    const result = await agent.run({ messages: [userMessage('Where is the helper defined?')] });
-    expect(result.stopReason).toBe('completed');
-    expect(result.plan).toBeUndefined();
-    expect(result.state.toolCalls).toBe(1);
   });
 
   test('run and stream produce the same messages and text', async () => {
@@ -136,31 +92,60 @@ describe('phase 1 demonstration', () => {
 });
 
 describe('termination paths', () => {
-  test('a blocked completion does not end the turn', async () => {
+  test('alternating between two actions without new evidence is reported, then ends the turn', async () => {
+    const lookup = agentTool({
+      description: 'Look something up.',
+      inputSchema: z.object({}),
+      risk: 'read',
+      resolveInput: () => ({}),
+      execute: () => ({ same: true }),
+    });
+    const other = agentTool({
+      description: 'Look something else up.',
+      inputSchema: z.object({}),
+      risk: 'read',
+      resolveInput: () => ({}),
+      execute: () => ({ same: true }),
+    });
     const controller = scriptedController({
-      decisions: [
-        { type: 'respond', outcome: 'completed' },
-        { type: 'respond', outcome: 'needs_input' },
-      ],
-      assess: { goalMet: false },
+      decisions: Array.from({ length: 20 }, (_, index) => ({ type: 'tool', tool: index % 2 === 0 ? 'lookup' : 'other' }) as const),
     });
+    const agent = createAgent({ instructions: 'Find it.', controller, model, tools: { lookup, other } });
+    const result = await agent.run({ messages: [userMessage('Find it.')] });
+    expect(result.stopReason).toBe('blocked');
+    const reports = result.state.blockers.filter(blocker => blocker.kind === 'no_progress');
+    expect(reports[0]?.reason).toContain('alternated');
+    expect(reports).toHaveLength(2);
+  });
 
-    const agent = createAgent({
-      instructions: 'Answer the question.',
-      controller,
-      model,
-      tools: { search: searchTool() },
+  test('a polling tool may repeat within its time limit', async () => {
+    let polls = 0;
+    const status = agentTool({
+      description: 'Check job status.',
+      inputSchema: z.object({}),
+      risk: 'read',
+      repeat: 'poll',
+      pollTimeoutMs: 60_000,
+      resolveInput: () => ({}),
+      execute: () => {
+        polls += 1;
+        return { state: 'running' };
+      },
     });
-
-    const result = await agent.run({ messages: [userMessage('Do the thing.')] });
+    const controller = scriptedController({
+      decisions: [...Array.from({ length: 8 }, () => ({ type: 'tool', tool: 'status' }) as const), { type: 'respond', outcome: 'needs_input' }],
+    });
+    const agent = createAgent({ instructions: 'Wait for the job.', controller, model, tools: { status } });
+    const result = await agent.run({ messages: [userMessage('Is it done?')] });
+    expect(polls).toBe(8);
+    expect(result.state.blockers).toHaveLength(0);
     expect(result.stopReason).toBe('needs_input');
-    expect(result.state.blockers.at(0)?.reason).toContain('Completion was requested');
   });
 
   test('the step limit produces a useful response', async () => {
     const controller = scriptedController({
       decisions: Array.from({ length: 10 }, () => ({ type: 'tool', tool: 'search' }) as const),
-      assess: { goalMet: false },
+
     });
 
     const agent = createAgent({
@@ -190,7 +175,7 @@ describe('termination paths', () => {
 
     const controller = scriptedController({
       decisions: Array.from({ length: 10 }, () => ({ type: 'tool', tool: 'stuck' }) as const),
-      assess: { goalMet: false },
+
     });
 
     const agent = createAgent({
@@ -206,6 +191,39 @@ describe('termination paths', () => {
     expect(result.steps).toBeLessThan(20);
   });
 
+  test('different resolved inputs are different attempts even when none can run', async () => {
+    let index = 0;
+    const lookup = agentTool({
+      description: 'Look up one record.',
+      inputSchema: z.object({ id: z.string().min(100) }),
+      risk: 'read',
+      resolveInput: () => ({ id: `record-${++index}` }),
+      execute: () => ({ ok: true }),
+    });
+    const controller = scriptedController({
+      decisions: [
+        { type: 'tool', tool: 'lookup' },
+        { type: 'tool', tool: 'lookup' },
+        { type: 'tool', tool: 'lookup' },
+        { type: 'tool', tool: 'lookup' },
+        { type: 'respond', outcome: 'blocked' },
+      ],
+    });
+    const agent = createAgent({
+      instructions: 'Inspect each known record.',
+      controller,
+      model,
+      tools: { lookup },
+      policy: { repeatLimit: 2 },
+    });
+
+    const result = await agent.run({ messages: [userMessage('Inspect four records.')] });
+
+    expect(result.stopReason).toBe('blocked');
+    expect(index).toBe(4);
+    expect(result.state.blockers.filter(blocker => blocker.kind === 'no_progress')).toHaveLength(0);
+  });
+
   test('cancellation stops work and preserves partial text', async () => {
     const abort = new AbortController();
     const controller = scriptedController({
@@ -217,7 +235,7 @@ describe('termination paths', () => {
         },
         { type: 'respond', outcome: 'completed' },
       ],
-      assess: { goalMet: false },
+
     });
 
     const agent = createAgent({
@@ -239,7 +257,7 @@ describe('termination paths', () => {
   test('selecting an unregistered tool is rejected rather than executed', async () => {
     const controller = scriptedController({
       decisions: [{ type: 'tool', tool: 'ghost' }],
-      assess: { goalMet: false },
+
     });
 
     const agent = createAgent({
@@ -272,7 +290,7 @@ describe('input resolution', () => {
         { type: 'tool', tool: 'broken' },
         { type: 'respond', outcome: 'needs_input' },
       ],
-      assess: { goalMet: false },
+
     });
 
     const agent = createAgent({
@@ -306,7 +324,7 @@ describe('input resolution', () => {
         { type: 'tool', tool: 'mistyped' },
         { type: 'respond', outcome: 'blocked' },
       ],
-      assess: { goalMet: false },
+
     });
 
     const agent = createAgent({
@@ -319,6 +337,7 @@ describe('input resolution', () => {
     const result = await agent.run({ messages: [userMessage('Go.')] });
     expect(executed).toBe(false);
     expect(result.state.blockers.at(0)?.reason).toContain('schema validation');
+    expect(result.state.blockers[0]).toMatchObject({ tool: 'mistyped', input: { count: 'not a number' } });
   });
 
   test('a generated input is used when no resolver is supplied', async () => {
@@ -338,7 +357,7 @@ describe('input resolution', () => {
         { type: 'tool', tool: 'generated' },
         { type: 'respond', outcome: 'completed' },
       ],
-      assess: { goalMet: true },
+
     });
 
     const agent = createAgent({
@@ -361,7 +380,7 @@ describe('policy', () => {
         { type: 'tool', tool: 'editFile' },
         { type: 'respond', outcome: 'blocked' },
       ],
-      assess: { goalMet: false },
+
     });
 
     const agent = createAgent({

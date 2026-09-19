@@ -12,8 +12,6 @@ export interface AgentConfig<TOOLS extends AgentToolSet> {
   tools: TOOLS;
   /** Model used to generate tool input when a tool has no input resolver. */
   argumentsModel?: LanguageModel;
-  /** Name of the registered tool that creates and revises plans. */
-  planningTool?: keyof TOOLS & string;
   /** Replaces the default final-response generator. */
   respond?: RespondAdapter;
   policy?: AgentPolicy;
@@ -31,12 +29,12 @@ export interface AgentDefinition<TOOLS extends AgentToolSet> {
   argumentsModel?: LanguageModel;
   tools: TOOLS;
   registry: Map<string, RegisteredTool>;
-  planningTool?: string;
   respond?: RespondAdapter;
   policy: ResolvedPolicy;
 }
 
 const defaultRisks: readonly Risk[] = ['read', 'write', 'destructive', 'unknown'];
+const defaultAuthorizeRisks: readonly Risk[] = ['write', 'destructive', 'unknown'];
 
 export function compileDefinition<TOOLS extends AgentToolSet>(
   config: AgentConfig<TOOLS>,
@@ -47,10 +45,6 @@ export function compileDefinition<TOOLS extends AgentToolSet>(
 
   const registry = registerTools(config.tools);
 
-  if (config.planningTool !== undefined && !registry.has(config.planningTool)) {
-    throw new ConfigurationError(`planningTool "${config.planningTool}" is not a registered tool.`);
-  }
-
   const policy = config.policy ?? {};
   const maxSteps = policy.maxSteps ?? 30;
   if (maxSteps < 1) throw new ConfigurationError('policy.maxSteps must be at least 1.');
@@ -60,6 +54,17 @@ export function compileDefinition<TOOLS extends AgentToolSet>(
   if (floor < 0 || floor > 1) {
     throw new ConfigurationError('policy.inferredConfidenceFloor must be between 0 and 1.');
   }
+  const authorization = policy.authorization ?? {};
+  const floors = {
+    permittedFloor: authorization.permittedFloor ?? floor,
+    verificationFloor: authorization.verificationFloor ?? floor,
+    confirmedFloor: authorization.confirmedFloor ?? floor,
+  };
+  for (const [name, value] of Object.entries(floors)) {
+    if (value < 0 || value > 1) {
+      throw new ConfigurationError(`policy.authorization.${name} must be between 0 and 1.`);
+    }
+  }
 
   return {
     instructions: config.instructions,
@@ -68,16 +73,14 @@ export function compileDefinition<TOOLS extends AgentToolSet>(
     argumentsModel: config.argumentsModel,
     tools: config.tools,
     registry,
-    planningTool: config.planningTool,
     respond: config.respond,
     policy: {
       maxSteps,
-      responseBudget: policy.responseBudget ?? 1,
       repeatLimit,
-      maxPlanRevisions: policy.maxPlanRevisions ?? 5,
       toolTimeoutMs: policy.toolTimeoutMs,
       generationTimeoutMs: policy.generationTimeoutMs,
       allowedRisks: new Set(policy.allowedRisks ?? defaultRisks),
+      authorization: { risks: new Set(authorization.risks ?? defaultAuthorizeRisks), ...floors },
       inferredConfidenceFloor: floor,
     },
   };
