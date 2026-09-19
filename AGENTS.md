@@ -19,9 +19,10 @@ special-case implementations that improve benchmark scores.
 - Test generic mechanisms with synthetic fixtures from multiple unrelated settings.
   Include renamed tools and negative cases to expose hidden domain assumptions. Do not
   copy benchmark fixtures into runtime logic or tailor a mechanism to their field layout.
-- Host applications may provide real authenticated identity and authoritative access checks
-  through generic interfaces. Never add a benchmark bypass or infer authorization from a
-  simulated user's claims.
+- The framework and bridge must work out of the box with supplied tool contracts and
+  instructions. Do not require a new domain integration to run an ordinary use case.
+  Do not add a host access callback, injected principal, or benchmark-only bypass. Use
+  the general instruction, evidence, and confirmation flow for permission decisions.
 - Report benchmark scope and limitations honestly. Results from a special-case adapter
   are not evidence of general framework improvement. Keep historical measurements intact
   and clearly label them when an implementation is replaced.

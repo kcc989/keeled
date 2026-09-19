@@ -39,10 +39,4 @@ export function testTool(passing = true) {
   });
 }
 
-/** These fixtures run against test-owned resources. Security tests use the raw constructor. */
-export function createTestAgent<const T extends AgentToolSet>(config: AgentConfig<T>) {
-  return createCoreAgent({
-    access: { principal: { subject: 'fixture-owner' }, authorize: () => ({ allowed: true, reason: 'Test-owned resource' }) },
-    ...config,
-  });
-}
+export const createTestAgent = createCoreAgent;

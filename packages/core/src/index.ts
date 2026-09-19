@@ -92,7 +92,7 @@ export type {
   UsageTotals,
 } from './types.ts';
 
-export type { Principal, AccessControl, AccessDecision, UncertainOperation } from './access.ts';
+export type { UncertainOperation } from './types.ts';
 export type { TaskContract, TaskGoal, TaskItem, TaskPatch, TaskTracker, GoalEvidence } from './task.ts';
 export { emptyTask, applyTaskPatch } from './task.ts';
 export type { InputInspection } from './tool.ts';

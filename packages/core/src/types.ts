@@ -1,4 +1,3 @@
-import type { UncertainOperation } from './access.ts';
 import type { TaskContract } from './task.ts';
 import type { FlexibleSchema, LanguageModel, ModelMessage, Tool, ToolSet, UIMessage } from 'ai';
 
@@ -225,3 +224,11 @@ export interface ManagedGeneration {
 export type PlainTool = Tool<any, any, any>;
 
 export type { ToolSet };
+
+export interface UncertainOperation {
+  id: string;
+  tool: string;
+  input: unknown;
+  reason: string;
+  status: 'unknown' | 'applied' | 'not_applied';
+}

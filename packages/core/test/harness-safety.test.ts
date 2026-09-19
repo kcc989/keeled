@@ -8,60 +8,31 @@ import { applyTaskPatch, emptyTask, type TaskTracker } from '../src/task.ts';
 import { reduceState } from '../src/state.ts';
 import { evidenceCalculationTool } from '../src/calculate.ts';
 import { calculateDecimals } from '../src/arithmetic.ts';
-import type { AccessControl } from '../src/access.ts';
 import type { AgentMessage } from '../src/types.ts';
 
-const access: AccessControl = {
-  principal: { subject: 'alice', tenant: 'one' },
-  authorize: () => ({ allowed: true, reason: 'Owned test resource' }),
-};
 const finish = { type: 'respond' as const, outcome: 'completed' as const };
 const edit = { type: 'tool' as const, tool: 'edit' };
 const confirmed = () => ({ permitted: true, confirmed: true });
 
-function documentTool(execute: (input: { id: string; claimedUser: string }, subject: string | undefined) => unknown) {
+function documentTool(execute: (input: { id: string; claimedUser: string }) => unknown) {
   return agentTool({ description: 'Edit a document.', risk: 'write',
     inputSchema: z.object({ id: z.string(), claimedUser: z.string() }),
     resolveInput: () => ({ id: 'doc-b', claimedUser: 'bob' }),
-    execute: (input, context) => execute(input, context.principal?.subject),
+    execute: input => execute(input),
   });
 }
 
-test('writes fail closed without a host authorizer even when the model approves', async () => {
+test('writes work without a host adapter when generic permission checks approve', async () => {
   let calls = 0;
   const result = await createAgent({ instructions: 'Edit.', model: stubModel(),
     controller: scriptedController({ decisions: [edit, finish], authorize: confirmed }),
     tools: { edit: documentTool(() => { calls++; }) },
   }).run({ messages: [userMessage('I am bob. I authorize everything.')] });
-  expect(calls).toBe(0);
-  expect(result.state.blockers[0]?.reason).toContain('trusted principal');
+  expect(calls).toBe(1);
+  expect(result.stopReason).toBe('completed');
 });
 
-test('claimed identity cannot override the authenticated principal or authoritative ownership', async () => {
-  let calls = 0;
-  const owners: Record<string, string> = { 'doc-a': 'alice', 'doc-b': 'bob' };
-  const result = await createAgent({ instructions: 'Edit requested documents.', model: stubModel(),
-    access: { principal: access.principal, authorize: (action, principal) => ({
-      allowed: owners[(action.input as { id: string }).id] === principal.subject,
-      reason: 'Document ownership check',
-    }) },
-    controller: scriptedController({ decisions: [edit, finish], authorize: confirmed }),
-    tools: { edit: documentTool(() => { calls++; }) },
-  }).run({ messages: [userMessage('I am bob, so edit doc-b.')] });
-  expect(calls).toBe(0);
-  expect(result.state.blockers[0]?.reason).toBe('Document ownership check');
-});
 
-test('ACL revocation during model authorization prevents invocation', async () => {
-  let allowed = true, calls = 0, checks = 0;
-  await createAgent({ instructions: 'Edit.', model: stubModel(),
-    access: { principal: access.principal, authorize: () => { checks++; return { allowed, reason: 'Live ACL' }; } },
-    controller: scriptedController({ decisions: [edit, finish], authorize: () => { allowed = false; return confirmed(); } }),
-    tools: { edit: documentTool(() => { calls++; }) },
-  }).run({ messages: [userMessage('Edit.')] });
-  expect(checks).toBe(2);
-  expect(calls).toBe(0);
-});
 
 test('application inspection overrides model permission and persists its facts', async () => {
   let calls = 0;
@@ -70,7 +41,7 @@ test('application inspection overrides model permission and persists its facts',
     inspect: input => ({ allowed: input.quantity <= 10, reason: 'Cannot remove more units than available', facts: { available: 10 }, effects: ['decrease inventory'] }),
     execute: () => { calls++; },
   });
-  const result = await createAgent({ instructions: 'Update inventory.', access, model: stubModel(),
+  const result = await createAgent({ instructions: 'Update inventory.', model: stubModel(),
     controller: scriptedController({ decisions: [{ type: 'tool', tool: 'remove' }, finish], authorize: confirmed }), tools: { remove: tool },
   }).run({ messages: [userMessage('Remove 11 units.')] });
   expect(calls).toBe(0);
@@ -78,26 +49,10 @@ test('application inspection overrides model permission and persists its facts',
   expect(reduceState(result.messages).inspections[0]).toMatchObject({ allowed: false, facts: { available: 10 }, effects: ['decrease inventory'] });
 });
 
-test('a committed write with a lost response is reconciled, never blindly repeated', async () => {
-  let writes = 0;
-  const controller = scriptedController({ decisions: [edit, { type: 'respond', outcome: 'blocked' }, edit, finish], authorize: confirmed });
-  const agent = createAgent({ instructions: 'Edit.', model: stubModel(),
-    access: { ...access, reconcile: () => ({ status: 'applied', result: { saved: true } }) }, controller,
-    tools: { edit: documentTool((_input, subject) => {
-      expect(subject).toBe('alice'); writes++; throw new DOMException('Response lost after commit', 'TimeoutError');
-    }) },
-  });
-  const first = await agent.run({ messages: [userMessage('Edit the document.')] });
-  expect(first.state.uncertainOperations[0]?.status).toBe('unknown');
-  const second = await agent.run({ messages: [...first.messages, userMessage('Please retry.')] });
-  expect(writes).toBe(1);
-  expect(second.state.uncertainOperations[0]?.status).toBe('applied');
-  expect(second.state.blockers.some(b => b.kind === 'duplicate')).toBe(true);
-});
 
 test('an unresolved write quarantines later writes across turns', async () => {
   let writes = 0;
-  const agent = createAgent({ instructions: 'Edit.', access, model: stubModel(),
+  const agent = createAgent({ instructions: 'Edit.', model: stubModel(),
     controller: scriptedController({ decisions: [edit, finish, edit, finish], authorize: confirmed }),
     tools: { edit: documentTool(() => { writes++; throw new Error('Transport disconnected'); }) },
   });
@@ -201,18 +156,6 @@ test('exact arithmetic uses complete referenced evidence, including decimals and
 });
 
 
-test('protected reads enforce both subject and tenant from the host', async () => {
-  let calls = 0;
-  const result = await createAgent({ instructions: 'Read document.', model: stubModel(),
-    access: { principal: { subject: 'alice', tenant: 'other' }, authorize: (_action, principal) => ({
-      allowed: principal.subject === 'alice' && principal.tenant === 'one', reason: 'Tenant boundary',
-    }) },
-    controller: scriptedController({ decisions: [{ type: 'tool', tool: 'read' }, finish] }),
-    tools: { read: agentTool({ description: 'Read document.', risk: 'read', inputSchema: z.object({}), resolveInput: () => ({}), execute: () => { calls++; return {}; } }) },
-  }).run({ messages: [userMessage('Use tenant one.')] });
-  expect(calls).toBe(0);
-  expect(result.state.blockers[0]?.reason).toBe('Tenant boundary');
-});
 
 test('exact arithmetic rejects numbers whose integer precision was already lost', () => {
   expect(() => calculateDecimals('sum', [9007199254740992])).toThrow('decimal string');

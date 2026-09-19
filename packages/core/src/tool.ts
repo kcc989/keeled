@@ -1,4 +1,3 @@
-import type { Principal } from './access.ts';
 import type {
   FlexibleSchema,
   InferSchema,
@@ -36,8 +35,6 @@ export interface InputInspection {
 }
 
 export interface AgentContext {
-  /** Trusted host identity, not a user ID extracted from a prompt. Enforce ACLs atomically in the tool. */
-  readonly principal?: Readonly<Principal>;
   readonly instructions: string;
   readonly request: string;
   readonly conversation: AgentMessage[];

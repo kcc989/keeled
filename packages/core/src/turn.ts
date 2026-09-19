@@ -1,4 +1,4 @@
-import type { UncertainOperation } from './access.ts';
+import type { UncertainOperation } from './types.ts';
 import type { TaskContract } from './task.ts';
 import type { InferUIMessageChunk, UIMessageStreamWriterWithOutcome } from 'ai';
 import { createId, stableHash } from './ids.ts';

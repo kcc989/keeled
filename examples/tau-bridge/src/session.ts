@@ -4,7 +4,6 @@ import {
   evidenceTool,
   evidenceCalculationTool,
   modelTaskTracker,
-  type AccessControl,
   type Agent,
   type AgentMessage,
   type AgentPolicy,
@@ -57,8 +56,6 @@ export interface SessionOptions {
   tools: ToolSpec[];
   history?: { role: 'user' | 'assistant'; text: string }[];
   controller: Controller;
-  /** Set by the trusted host, never by the session request body. */
-  access?: AccessControl;
   /** Defaults on; disable only for tests with scripted task state. */
   trackTasks?: boolean;
   model: LanguageModel;
@@ -91,7 +88,6 @@ export class Session {
     const trace = (entry: TraceEntry) => this.#trace.push(entry);
     this.#agent = createAgent({
       instructions: options.instructions,
-      access: options.access,
       taskTracker: options.trackTasks === false ? undefined : modelTaskTracker(),
       controller: observe(options.controller, trace, decision => this.#decisions.push(logOf(decision))),
       model: timed(options.model, trace),

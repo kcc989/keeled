@@ -1,4 +1,3 @@
-import type { AccessControl } from './access.ts';
 import type { TaskTracker } from './task.ts';
 import type { LanguageModel } from 'ai';
 import { ConfigurationError } from './errors.ts';
@@ -9,7 +8,6 @@ import type { AgentMessage, AgentPolicy, AgentResult, ResolvedPolicy, Risk } fro
 
 export interface AgentConfig<TOOLS extends AgentToolSet> {
   instructions: string;
-  access?: AccessControl;
   taskTracker?: TaskTracker;
   controller: Controller;
   model: LanguageModel;
@@ -28,7 +26,6 @@ export interface RunOptions {
 
 export interface AgentDefinition<TOOLS extends AgentToolSet> {
   instructions: string;
-  access?: AccessControl;
   taskTracker?: TaskTracker;
   controller: Controller;
   model: LanguageModel;
@@ -74,7 +71,6 @@ export function compileDefinition<TOOLS extends AgentToolSet>(
 
   return {
     instructions: config.instructions,
-    access: config.access,
     taskTracker: config.taskTracker,
     controller: config.controller,
     model: config.model,

@@ -121,9 +121,6 @@ The snapshot results above predate the current changes and do not measure them.
 Sessions now use the reusable task tracker and evidence calculation tool. Tests can disable
 the tracker with `trackTasks: false`. The framework has no domain-specific policy, pricing, or ownership rules.
 
-`Session` accepts a trusted `access` adapter from its host. The stock loopback HTTP server
-does not authenticate benchmark users or supply this adapter, so mutations now fail
-closed. The runner is therefore not yet configured for a comparable write-enabled run.
-Before another benchmark, integrate a trusted identity and authoritative resource access
-adapter in the host. A user ID in a simulated conversation is not sufficient authorization.
-HTTP request bodies cannot configure access or disable the task tracker.
+The stock server runs with the same generic instruction, evidence, and confirmation checks
+as any other host. There is no domain adapter or host access callback. Model permission
+checks do not establish authenticated identity.

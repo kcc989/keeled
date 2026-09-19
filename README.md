@@ -171,7 +171,7 @@ results relevant to it have changed. A refusal records the instructions it appli
 results it cited, and the state-changing calls so far; it is reconsidered when any of those
 change, when any new evidence arrives for a refusal over missing evidence, and after a
 minute when the verdict depends on time. A controller without `authorize` authorizes
-no semantic permission check. The separate host access check still applies.
+no semantic permission check.
 
 ### Replies
 
@@ -251,26 +251,9 @@ Treat any performance benefit as a hypothesis until it is measured.
 
 ## Application trust and durable execution
 
-All non-read tools now require `access` on `createAgent`. Without a host authorizer,
-mutations fail closed, even if the model approves. Supply a principal from the authenticated
-server session, never from chat, generated arguments, or client-supplied conversation data:
-
-```ts
-access: {
-  principal: { subject: session.userId, tenant: session.tenantId },
-  authorize: async (action, principal) => ({
-    allowed: await permissions.canInvoke(principal, action.tool, action.input),
-    reason: 'Authoritative resource access check',
-  }),
-}
-```
-
-With `access` configured, reads also pass through it. The callback runs before inspection
-and again immediately before execution. It must check every affected resource and tenant.
-Tools receive `context.principal`; enforce the same access condition atomically with the
-underlying mutation to prevent races. The host must own tool registration, risk labels,
-and persisted messages. Model permission judgments and user confirmation are additional
-checks, not authentication or proof of ownership.
+Tools use the generic instruction, evidence, and confirmation checks. There is no host
+access callback, injected principal, or domain adapter. These checks reason about supplied
+policies and tool results; they do not constitute authentication of an external identity.
 
 A tool can supply `inspect(input, context)` to return `{ allowed, reason, facts, effects }`
 from application rules. A denial prevents execution. Facts and effects are recorded and
@@ -278,18 +261,15 @@ shown to the permission checker and responder; they are observations at inspecti
 not permanent guarantees. Enforce inventory, version, and other mutable conditions again
 atomically in the tool implementation.
 
-A failed or interrupted mutation has an unknown outcome. Further writes stop until the
-host's optional `access.reconcile` checks the operation ID against authoritative execution
-records and returns `applied`, `not_applied`, or `unknown`. Tool execution receives that ID
-as `toolCallId`; use it as an idempotency key. Never report `not_applied` while the original
-operation could still commit. An applied result is recorded without repeating the write.
+A failed or interrupted mutation has an unknown outcome. Further writes and completion
+are blocked rather than blindly repeating an operation that may already have succeeded.
+There is currently no automatic reconciliation path for ambiguous writes.
 
 `taskTracker` is optional. `modelTaskTracker()` extracts additive goals and constraints
 once per user message, with exact quotes as provenance. Omitted items remain. Use unique,
 immutable user-message IDs. Before completion, pending goals require successful evidence;
 write goals require a write after the request. Model extraction and verification can still
-be wrong. Applications can supply their own `TaskTracker`; host access checks remain
-independent of generated task state.
+be wrong. Applications can supply their own `TaskTracker`; permission checks also consider instructions and evidence.
 
 Unavailable tools remain in `ControllerContext.toolCatalog`, with availability marked.
 After argument resolution fails, another attempt waits for different successful evidence.

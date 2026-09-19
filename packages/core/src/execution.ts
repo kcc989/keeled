@@ -1,4 +1,3 @@
-import type { AccessControl } from './access.ts';
 import { abortable } from './async.ts';
 import { applyTaskPatch } from './task.ts';
 import { createUIMessageStream, createUIMessageStreamResponse } from 'ai';
@@ -192,12 +191,10 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
   #candidateVersion = 0;
   readonly #candidatePrefix = createId('snapshot');
   readonly #resolutionFailures = new Map<string, { revision: string; reason: string }>();
-  readonly #access: AccessControl | undefined;
   #catalog: (AvailableTool & { available: boolean })[] = [];
   readonly #callerSignal: AbortSignal | undefined;
   #deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   #lastCompletionCheck: string | undefined;
-  readonly #reconciled = new Set<string>();
   #stopReason: StopReason = 'limit';
 
   constructor(
@@ -208,7 +205,6 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     usage: UsageTotals,
   ) {
     this.#definition = definition;
-    this.#access = definition.access === undefined ? undefined : { ...definition.access, principal: Object.freeze(structuredClone(definition.access.principal)) };
     this.#policy = definition.policy;
     this.#usage = usage;
     this.#originalMessages = originalMessages;
@@ -263,7 +259,6 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
         const patch = await abortable(this.#abort.signal, () => tracker.update(this.#agentContext(undefined)));
         this.#turn.recordTask(applyTaskPatch(this.#turn.state.task, patch, user.id, this.#request));
       }
-      await this.#reconcile();
       while (this.#turn.hasWorkBudget()) {
         this.#turn.throwIfAborted();
         this.#turn.beginCycle();
@@ -287,7 +282,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
           this.#turn.recordDecision({ ...control, action });
           if (action.type === 'respond') {
             if (action.outcome === 'completed' && this.#turn.state.uncertainOperations.some(operation => operation.status === 'unknown')) {
-              this.#turn.recordBlocker('missing_evidence', 'A write has an unknown outcome.', 'Have the host reconcile the write before declaring completion.');
+              this.#turn.recordBlocker('missing_evidence', 'A write has an unknown outcome.', 'Verify the write outcome before declaring completion.');
               outcome = 'blocked';
               break;
             }
@@ -456,14 +451,9 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     }
 
     if (tool.risk !== 'read' && this.#turn.state.uncertainOperations.some(operation => operation.status === 'unknown')) {
-      this.#turn.recordBlocker('policy_denied', 'A previous write has an unknown outcome.', 'The host must reconcile that operation before further writes.', { tool: tool.name, input: validated.value });
+      this.#turn.recordBlocker('policy_denied', 'A previous write has an unknown outcome.', 'The outcome must be verified before further writes.', { tool: tool.name, input: validated.value });
       return;
     }
-    if (this.#reconciled.has(stableHash([tool.name, validated.value]))) {
-      this.#turn.recordBlocker('duplicate', 'The host verified that this write already succeeded.', 'Use its verified result.', { tool: tool.name, input: validated.value });
-      return;
-    }
-    if (!(await this.#checkAccess(tool, validated.value))) return;
     const inspection = await abortable(this.#abort.signal, () => tool.inspect?.(structuredClone(validated.value), context));
     if (inspection !== undefined) this.#turn.recordInspection({ id: createId('inspection'), tool: tool.name, input: structuredClone(validated.value), ...structuredClone(inspection) });
     if (inspection !== undefined && inspection.allowed !== true) {
@@ -479,8 +469,6 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       return;
     }
 
-    // Authorization can take time. Recheck authoritative ACLs immediately before invocation.
-    if (!(await this.#checkAccess(tool, validated.value))) return;
     this.#abort.signal.throwIfAborted();
     const toolCallId = createId('call');
     const finalInput = validated.value;
@@ -717,25 +705,6 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
   }
 
 
-  async #reconcile(): Promise<void> {
-    const access = this.#access;
-    if (access?.reconcile === undefined) return;
-    for (const operation of [...this.#turn.state.uncertainOperations]) {
-      if (operation.status !== 'unknown') continue;
-      const tool = this.#definition.registry.get(operation.tool);
-      if (tool === undefined || !(await this.#checkAccess(tool, operation.input))) continue;
-      const result = await abortable(this.#abort.signal, () => access.reconcile!(structuredClone(operation), Object.freeze({ ...access.principal }), this.#abort.signal));
-      if (result.status !== 'applied' && result.status !== 'not_applied') continue;
-      this.#turn.recordOperation({ ...operation, status: result.status });
-      if (result.status === 'applied') {
-        this.#reconciled.add(stableHash([operation.tool, operation.input]));
-        const ref = createId('reconciled');
-        this.#turn.recordToolInput(ref, operation.tool, operation.input);
-        this.#turn.recordToolOutput(ref, result.result ?? { verifiedApplied: true });
-      }
-    }
-  }
-
   #resolutionVersion(tool: RegisteredTool): string {
     return tool.resolutionKey?.(this.#agentContext(undefined)) ?? this.#evidenceVersion();
   }
@@ -745,23 +714,6 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     return stableHash([...new Set(callHistory(this.#turn.conversation, this.#turn.state.observations)
       .filter(call => call.outcome === 'result')
       .map(call => stableHash([call.tool, call.input, call.result])))].sort());
-  }
-
-  async #checkAccess(tool: RegisteredTool, input: unknown): Promise<boolean> {
-    const access = this.#access;
-    if (access === undefined && tool.risk === 'read') return true;
-    let allowed = false;
-    let reason = 'A trusted principal and application access authorizer are required for this operation.';
-    if (access !== undefined && access.principal.subject.trim().length > 0) {
-      const verdict = await abortable(this.#abort.signal, () => access.authorize(
-        { tool: tool.name, description: tool.description, risk: tool.risk, input: structuredClone(input) },
-        Object.freeze({ ...access.principal }), this.#abort.signal,
-      ));
-      allowed = verdict.allowed === true;
-      reason = verdict.reason;
-    }
-    if (!allowed) this.#turn.recordBlocker('policy_denied', reason, 'The authenticated host must grant access to this resource.', { tool: tool.name, input });
-    return allowed;
   }
 
   async #verifyCompletion(): Promise<boolean> {
@@ -804,7 +756,6 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
         : awaitingConfirmation(this.#turn.conversation).findLast(held => held.tool === action.tool);
     return {
       instructions: this.#definition.instructions,
-      ...(this.#access === undefined ? {} : { principal: Object.freeze({ ...this.#access.principal }) }),
       request: this.#request,
       conversation,
       messages: projectMessages(conversation),
