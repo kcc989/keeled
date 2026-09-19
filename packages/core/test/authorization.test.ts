@@ -1,6 +1,6 @@
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import { z } from 'zod';
-import { createAgent } from '../src/agent.ts';
+import { createTestAgent as createAgent } from './fixtures.ts';
 import { agentTool } from '../src/tool.ts';
 import { scriptedController, stubModel, userMessage } from '../src/testing.ts';
 import type { PendingAction } from '../src/controller.ts';

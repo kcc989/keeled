@@ -79,6 +79,7 @@ export type {
   BlockerRecord,
   DecisionRecord,
   ExecutionState,
+  InspectionRecord,
   ManagedGeneration,
   ModelCallOptions,
   Observation,
@@ -90,3 +91,13 @@ export type {
   UsageBucket,
   UsageTotals,
 } from './types.ts';
+
+export type { Principal, AccessControl, AccessDecision, UncertainOperation } from './access.ts';
+export type { TaskContract, TaskGoal, TaskItem, TaskPatch, TaskTracker, GoalEvidence } from './task.ts';
+export { emptyTask, applyTaskPatch } from './task.ts';
+export type { InputInspection } from './tool.ts';
+
+export { calculateDecimals } from './arithmetic.ts';
+export { evidenceCalculationTool } from './calculate.ts';
+
+export { modelTaskTracker } from './task-tracker.ts';

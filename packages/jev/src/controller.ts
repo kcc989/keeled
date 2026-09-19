@@ -63,8 +63,9 @@ export function jev(options: JevControllerOptions = {}): Controller {
           guidance +
           `${repetitionNote(tool.name, history)}${blockerNote(tool.name, context.blockers)}` +
           readinessNote(tool, context, history);
+        if (tool.resolutionBlocked !== undefined) delete criteria[tool.name];
         if (tool.risk === 'read' && tool.candidates?.length) {
-          criteria[tool.name] += ' Use this fallback only when none of the ready calls for this tool fits; its arguments will need resolution.';
+          if (criteria[tool.name] !== undefined) criteria[tool.name] += ' Use this fallback only when none of the ready calls for this tool fits; its arguments will need resolution.';
           for (const candidate of tool.candidates) {
             readyCalls.set(candidate.id, { tool: tool.name, candidateId: candidate.id });
             criteria[candidate.id] = `Execute ${tool.name} with exact input ${JSON.stringify(candidate.input)}. ` +
@@ -114,7 +115,7 @@ export function jev(options: JevControllerOptions = {}): Controller {
 
     async authorize(context: ControllerContext, action: PendingAction): Promise<Authorization> {
       const questions = {
-        permitted: noul('Do the agent instructions permit the pending action now, given the tool results?', {
+        permitted: noul('Do the agent instructions permit these exact effects now, given the verified application facts and tool results? Apply only rules for this operation, not different operations supported by the same tool. Respect all retained user constraints.', {
           true: 'The instructions set no conditions on this kind of action, or every condition they set is shown to be met by the tool results.',
           false: 'A condition the instructions set on this kind of action is unmet, or the tool results do not yet show that it is met.',
         }),
@@ -140,6 +141,8 @@ export function jev(options: JevControllerOptions = {}): Controller {
           description: action.description,
           risk: action.risk,
           input: action.input as JsonValue,
+          verified_facts: (action.facts ?? {}) as JsonValue,
+          effects: action.effects ?? [],
         },
       });
       const answers = result.answers as unknown as Record<string, NoulResponse>;

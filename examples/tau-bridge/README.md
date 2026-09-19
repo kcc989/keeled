@@ -163,3 +163,18 @@ The older saved full run (`keeled_airline_50_v2`) scored 36/50, but does not rec
 model or exact agent source, so it is not a matched baseline. The full result does not yet
 establish a general accuracy gain. Error rows also lose duration and usage data, preventing
 a clean total-latency or cost comparison. No runtime changes were made during this run.
+
+
+## Generic harness changes after the snapshot
+
+The snapshot results above predate the current changes and do not measure them.
+Sessions now use the reusable task tracker and evidence calculation tool. Tests can disable
+the tracker with `trackTasks: false`. No new airline policy, pricing, or ownership rules
+were added to the framework.
+
+`Session` accepts a trusted `access` adapter from its host. The stock loopback HTTP server
+does not authenticate benchmark users or supply this adapter, so mutations now fail
+closed. The runner is therefore not yet configured for a comparable write-enabled run.
+Before another benchmark, integrate a trusted identity and authoritative resource access
+adapter in the host. A user ID in a simulated conversation is not sufficient authorization.
+HTTP request bodies cannot configure access or disable the task tracker.

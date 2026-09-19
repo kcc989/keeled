@@ -13,6 +13,8 @@ export interface AvailableTool {
   risk: Risk;
   /** Names of the input's required top-level parameters, so a controller can judge readiness. */
   required: string[];
+  /** Ordinary argument resolution is suspended until evidence changes; ready calls remain usable. */
+  resolutionBlocked?: string;
   /** Ready calls in the current decision snapshot; the runtime owns their inputs. */
   candidates?: readonly { id: string; input: unknown; description: string; sources: readonly string[] }[];
 }
@@ -29,6 +31,8 @@ export interface ControllerContext {
   readonly conversation: readonly AgentMessage[];
   readonly state: Readonly<ExecutionState>;
   readonly availableTools: readonly AvailableTool[];
+  /** Full registered catalog, including tools temporarily unavailable for selection. */
+  readonly toolCatalog?: readonly (AvailableTool & { available: boolean })[];
   readonly observations: readonly Observation[];
   readonly blockers: readonly Blocker[];
   /** Actions held for confirmation, in this turn or an earlier one, that have not run. */
@@ -69,6 +73,8 @@ export interface PendingAction {
   description: string;
   risk: Risk;
   input: unknown;
+  facts?: Record<string, unknown>;
+  effects?: string[];
 }
 
 export interface Judgement {

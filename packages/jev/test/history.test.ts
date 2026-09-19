@@ -215,6 +215,8 @@ describe('authorization', () => {
       description: 'Cancel the whole reservation.',
       risk: 'write',
       input: { reservation_id: 'Q69X3R' },
+      facts: {},
+      effects: [],
     });
 
     expect(Object.keys(requests[0]!.questions).sort()).toEqual(['confirmed', 'needs_verification', 'permitted']);
@@ -223,6 +225,8 @@ describe('authorization', () => {
       description: 'Cancel the whole reservation.',
       risk: 'write',
       input: { reservation_id: 'Q69X3R' },
+      verified_facts: {},
+      effects: [],
     });
     expect(answer.permitted.value).toBe(true);
     expect(answer.needsVerification.value).toBe(true);

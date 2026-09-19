@@ -1,3 +1,4 @@
+import type { Principal } from './access.ts';
 import type {
   FlexibleSchema,
   InferSchema,
@@ -26,7 +27,17 @@ export interface ActionIntent {
   awaitingInput?: unknown;
 }
 
+export interface InputInspection {
+  /** Deterministic, application-owned checks; denial cannot be overruled by a model. */
+  allowed: boolean;
+  reason: string;
+  facts?: Record<string, unknown>;
+  effects?: string[];
+}
+
 export interface AgentContext {
+  /** Trusted host identity, not a user ID extracted from a prompt. Enforce ACLs atomically in the tool. */
+  readonly principal?: Readonly<Principal>;
   readonly instructions: string;
   readonly request: string;
   readonly conversation: AgentMessage[];
@@ -78,6 +89,9 @@ export interface AgentToolSpec<SCHEMA extends FlexibleSchema<any>, OUTPUT> {
   available?: AgentAvailability;
   /** Optional ready-call builder. Only read tools may offer candidates. */
   candidates?: CandidateProvider<InferSchema<SCHEMA>>;
+  /** Optional application evidence version for argument resolution. User-turn changes always invalidate it. */
+  resolutionKey?: (context: AgentContext) => string;
+  inspect?: (input: InferSchema<SCHEMA>, context: AgentContext) => InputInspection | PromiseLike<InputInspection>;
   resolveInput?: (context: AgentContext) => InferSchema<SCHEMA> | PromiseLike<InferSchema<SCHEMA>>;
   execute: (
     input: InferSchema<SCHEMA>,
@@ -93,6 +107,8 @@ export interface AgentToolExtensions<INPUT, OUTPUT> {
   readonly model?: LanguageModel;
   readonly available?: AgentAvailability;
   readonly candidates?: CandidateProvider<INPUT>;
+  readonly resolutionKey?: (context: AgentContext) => string;
+  readonly inspect?: (input: INPUT, context: AgentContext) => InputInspection | PromiseLike<InputInspection>;
   readonly resolveInput?: (context: AgentContext) => INPUT | PromiseLike<INPUT>;
   readonly execute: (
     input: INPUT,
@@ -162,6 +178,8 @@ export interface RegisteredTool {
   kind: 'agent' | 'sdk';
   available?: AgentAvailability;
   candidates?: CandidateProvider;
+  resolutionKey?: (context: AgentContext) => string;
+  inspect?: (input: unknown, context: AgentContext) => InputInspection | PromiseLike<InputInspection>;
   resolveInput?: (context: AgentContext) => unknown | PromiseLike<unknown>;
   invoke: (input: unknown, options: AgentToolExecutionOptions) => unknown | PromiseLike<unknown>;
 }
@@ -222,6 +240,8 @@ function register(name: string, tool: AnyAgentTool | Tool<any, any, any>): Regis
       kind: 'agent',
       available: tool.available,
       candidates: tool.candidates,
+      resolutionKey: tool.resolutionKey,
+      inspect: tool.inspect,
       resolveInput: tool.resolveInput,
       invoke: (input, options) => tool.execute(input, options),
     };

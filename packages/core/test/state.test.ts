@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { createAgent } from '../src/agent.ts';
+import { createTestAgent as createAgent } from './fixtures.ts';
 import { callHistory } from '../src/projection.ts';
 import { reduceState, reducerVersion } from '../src/state.ts';
 import { scriptedController, stubModel, userMessage } from '../src/testing.ts';
@@ -58,6 +58,6 @@ describe('reduceState', () => {
       { type: 'data-fact', data: { invalid: 'legacy schema' } },
     ] }] as unknown as AgentMessage[];
     expect(reduceState(messages)).toEqual(reduceState([]));
-    expect(reduceState([]).reducerVersion).toBe(3);
+    expect(reduceState([]).reducerVersion).toBe(4);
   });
 });

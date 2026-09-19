@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { tool, type InferUITools, type UIMessage } from 'ai';
 import { z } from 'zod';
-import { createAgent } from '../src/agent.ts';
+import { createTestAgent as createAgent } from './fixtures.ts';
 import { reduceState } from '../src/state.ts';
 import { agentTool } from '../src/tool.ts';
 import type { AgentDataParts, AgentMetadata } from '../src/types.ts';

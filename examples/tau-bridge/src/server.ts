@@ -21,11 +21,12 @@ if (!modelId || !apiKey) {
 const providers = providersFromEnvironment();
 const { model, argumentsModel, writeArgumentsModel } = openRouterModels(modelId, apiKey, providers);
 const controller = jev();
-const policy = { generationTimeoutMs: 60_000 };
+const policy = { generationTimeoutMs: 60_000, turnTimeoutMs: 240_000 };
 const sessions = new Map<string, Session>();
 const route = /^\/sessions\/([^/]+)(?:\/(user|tool))?$/;
 
 const server = Bun.serve({
+  hostname: '127.0.0.1',
   port: Number(process.env['KEELED_BRIDGE_PORT'] ?? 8787),
   idleTimeout: 0,
   async fetch(request) {
@@ -41,7 +42,7 @@ const server = Bun.serve({
       if (action === undefined && request.method === 'PUT') {
         const body = (await request.json()) as Pick<SessionOptions, 'instructions' | 'tools' | 'history'>;
         sessions.get(id)?.close();
-        sessions.set(id, new Session({ ...body, controller, model, argumentsModel, writeArgumentsModel, policy }));
+        sessions.set(id, new Session({ instructions: body.instructions, tools: body.tools, history: body.history, controller, model, argumentsModel, writeArgumentsModel, policy }));
         return new Response(null, { status: 201 });
       }
       if (action === undefined && request.method === 'DELETE') {

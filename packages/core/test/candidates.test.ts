@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { z } from 'zod';
-import { createAgent } from '../src/agent.ts';
+import { createTestAgent as createAgent } from './fixtures.ts';
 import { agentTool } from '../src/tool.ts';
 import { stubModel, userMessage } from '../src/testing.ts';
 import type { Controller } from '../src/controller.ts';

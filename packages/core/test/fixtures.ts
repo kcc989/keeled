@@ -1,3 +1,5 @@
+import { createAgent as createCoreAgent, type AgentConfig } from '../src/agent.ts';
+import type { AgentToolSet } from '../src/tool.ts';
 import { z } from 'zod';
 import { agentTool } from '../src/tool.ts';
 export function searchTool(results: string[] = ['src/index.ts']) {
@@ -34,5 +36,13 @@ export function testTool(passing = true) {
     risk: 'write',
     resolveInput: () => ({}),
     execute: () => ({ passed: passing, failures: passing ? 0 : 2 }),
+  });
+}
+
+/** These fixtures run against test-owned resources. Security tests use the raw constructor. */
+export function createTestAgent<const T extends AgentToolSet>(config: AgentConfig<T>) {
+  return createCoreAgent({
+    access: { principal: { subject: 'fixture-owner' }, authorize: () => ({ allowed: true, reason: 'Test-owned resource' }) },
+    ...config,
   });
 }

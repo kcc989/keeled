@@ -2,6 +2,9 @@ import { wrapLanguageModel, type LanguageModel } from 'ai';
 import {
   createAgent,
   evidenceTool,
+  evidenceCalculationTool,
+  modelTaskTracker,
+  type AccessControl,
   type Agent,
   type AgentMessage,
   type AgentPolicy,
@@ -54,6 +57,10 @@ export interface SessionOptions {
   tools: ToolSpec[];
   history?: { role: 'user' | 'assistant'; text: string }[];
   controller: Controller;
+  /** Set by the trusted host, never by the session request body. */
+  access?: AccessControl;
+  /** Defaults on; disable only for tests with scripted task state. */
+  trackTasks?: boolean;
   model: LanguageModel;
   /** Model used to fill in tool arguments. Defaults to `model`. */
   argumentsModel?: LanguageModel;
@@ -84,6 +91,8 @@ export class Session {
     const trace = (entry: TraceEntry) => this.#trace.push(entry);
     this.#agent = createAgent({
       instructions: options.instructions,
+      access: options.access,
+      taskTracker: options.trackTasks === false ? undefined : modelTaskTracker(),
       controller: observe(options.controller, trace, decision => this.#decisions.push(logOf(decision))),
       model: timed(options.model, trace),
       tools: {
@@ -94,6 +103,7 @@ export class Session {
           options.writeArgumentsModel === undefined ? undefined : timed(options.writeArgumentsModel, trace),
         ),
         evidence: evidenceTool(),
+        arithmetic: evidenceCalculationTool(),
       },
       respond: respondWith(
         options.tools,
@@ -118,7 +128,7 @@ export class Session {
       result => {
         this.#messages = result.messages;
         this.#running = false;
-        this.#emit({ type: 'message', text: result.text, stopReason: result.stopReason, usage: result.usage });
+        this.#emit({ type: 'message', text: result.text.trim() || `The turn ended with status ${result.stopReason}; no response text was produced.`, stopReason: result.stopReason, usage: result.usage });
       },
       error => {
         this.#running = false;

@@ -1,3 +1,5 @@
+import type { UncertainOperation } from './access.ts';
+import type { TaskContract } from './task.ts';
 import type { InferUIMessageChunk, UIMessageStreamWriterWithOutcome } from 'ai';
 import { createId, stableHash } from './ids.ts';
 import { errorMessage, isAbortError } from './errors.ts';
@@ -6,6 +8,7 @@ import { awaitingConfirmation } from './projection.ts';
 import { type AvailableTool, type ControllerContext, type ControllerDecision } from './controller.ts';
 import type {
   AgentMessage,
+  InspectionRecord,
   BlockerKind,
   BlockerRecord,
   DecisionRecord,
@@ -91,6 +94,7 @@ export class Turn {
 
   decisionContext(
     availableTools: readonly AvailableTool[],
+    toolCatalog: ControllerContext['toolCatalog'] = availableTools.map(tool => ({ ...tool, available: true })),
   ): ControllerContext {
     const conversation = this.#conversation();
     return {
@@ -99,6 +103,7 @@ export class Turn {
       conversation,
       state: this.#state,
       availableTools,
+      toolCatalog,
       observations: this.#state.observations,
       blockers: this.#state.blockers,
       awaitingConfirmation: awaitingConfirmation(conversation),
@@ -109,6 +114,18 @@ export class Turn {
       },
       abortSignal: this.#options.abortSignal,
     };
+  }
+
+  recordInspection(inspection: InspectionRecord): void {
+    this.#record({ type: 'data-inspection', data: inspection });
+  }
+
+  recordOperation(operation: UncertainOperation): void {
+    this.#record({ type: 'data-operation', data: operation });
+  }
+
+  recordTask(task: TaskContract): void {
+    this.#record({ type: 'data-task', data: task });
   }
 
   recordDecision(decision: ControllerDecision, overridden?: { reason: string }): DecisionRecord {
@@ -155,7 +172,7 @@ export class Turn {
   }
 
   recordRuntimeError(error: unknown): void {
-    const aborted = this.isAborted() || isAbortError(error);
+    const aborted = isAbortError(error);
     this.#transition({ kind: aborted ? 'cancelled' : 'error', detail: errorMessage(error) });
   }
 
@@ -307,6 +324,9 @@ export class Turn {
 /** Mirrors the SDK's chunk-to-part assembly for the parts this runtime writes. */
 function toPart(chunk: Chunk, parts: AgentMessage['parts']): AgentMessage['parts'][number] | undefined {
   switch (chunk.type) {
+    case 'data-inspection':
+    case 'data-operation':
+    case 'data-task':
     case 'data-decision':
     case 'data-blocker':
     case 'data-transition':

@@ -1,3 +1,4 @@
+import { emptyTask } from './task.ts';
 import type {
   AgentMessage,
   BlockerRecord,
@@ -7,11 +8,14 @@ import type {
   TransitionRecord,
 } from './types.ts';
 
-export const reducerVersion = 3;
+export const reducerVersion = 4;
 
 export function emptyState(): ExecutionState {
   return {
     reducerVersion,
+    task: emptyTask(),
+    uncertainOperations: [],
+    inspections: [],
     cycle: 0,
     stepsUsed: 0,
     observations: [],
@@ -46,7 +50,7 @@ export function reduceState(messages: readonly AgentMessage[]): ExecutionState {
 }
 
 function nextTurnState(completed: ExecutionState): ExecutionState {
-  return { ...emptyState(), stopReason: completed.stopReason };
+  return { ...emptyState(), task: completed.task, uncertainOperations: completed.uncertainOperations, inspections: completed.inspections, stopReason: completed.stopReason };
 }
 
 /** The decision currently in effect, which attributes the tool parts that follow it. */
@@ -60,6 +64,23 @@ function applyPart(
   context: ReduceContext,
 ): void {
   const type = part.type;
+
+  if (part.type === 'data-inspection') {
+    state.inspections.push(structuredClone(part.data));
+    return;
+  }
+
+  if (part.type === 'data-operation') {
+    const index = state.uncertainOperations.findIndex(operation => operation.id === part.data.id);
+    if (index === -1) state.uncertainOperations.push(structuredClone(part.data));
+    else state.uncertainOperations[index] = structuredClone(part.data);
+    return;
+  }
+
+  if (part.type === 'data-task') {
+    state.task = structuredClone(part.data);
+    return;
+  }
 
   if (type === 'data-decision') {
     const record = (part as { data: DecisionRecord }).data;
