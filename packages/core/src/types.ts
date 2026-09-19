@@ -1,5 +1,5 @@
 import type { FlexibleSchema, LanguageModel, ModelMessage, Tool, ToolSet, UIMessage } from 'ai';
-import type { KnownFact, Plan, StepStatus, TaskState } from './plan.ts';
+import type { Plan, StepStatus } from './plan.ts';
 
 export type StopReason = 'completed' | 'needs_input' | 'blocked' | 'limit' | 'error' | 'cancelled';
 
@@ -28,24 +28,7 @@ export interface AgentPolicy {
   toolTimeoutMs?: number;
   generationTimeoutMs?: number;
   allowedRisks?: readonly Risk[];
-  authorization?: AuthorizationPolicy;
   inferredConfidenceFloor?: number;
-}
-
-/**
- * Which calls the controller must authorize before they run, and how confident each of its
- * judgements must be. A permission judgement below its floor, or any doubt that verification
- * is unnecessary, escalates to a model check; a confirmation below its floor counts as absent.
- */
-export interface AuthorizationPolicy {
-  /** Defaults to `write`, `destructive`, and `unknown`. */
-  risks?: readonly Risk[];
-  /** Defaults to `inferredConfidenceFloor`. */
-  permittedFloor?: number;
-  /** Defaults to `inferredConfidenceFloor`. */
-  verificationFloor?: number;
-  /** Defaults to `inferredConfidenceFloor`. */
-  confirmedFloor?: number;
 }
 
 export interface ResolvedPolicy {
@@ -56,12 +39,6 @@ export interface ResolvedPolicy {
   toolTimeoutMs: number | undefined;
   generationTimeoutMs: number | undefined;
   allowedRisks: ReadonlySet<Risk>;
-  authorization: {
-    risks: ReadonlySet<Risk>;
-    permittedFloor: number;
-    verificationFloor: number;
-    confirmedFloor: number;
-  };
   inferredConfidenceFloor: number;
 }
 
@@ -73,9 +50,6 @@ export interface AgentResult {
   stopReason: StopReason;
   usage: UsageTotals;
   state: ExecutionState;
-  /** Durable goals, constraints, and sourced facts for the active task. */
-  taskState?: TaskState;
-  /** @deprecated Use taskState. */
   plan?: Plan;
   steps: number;
 }
@@ -87,37 +61,15 @@ export interface Observation {
   tool?: string;
   stepId?: string;
   summary: string;
-  /** For tool observations, the validated input the call was made with. */
-  input?: unknown;
   detail?: unknown;
 }
-
-/**
- * Why an attempt could not proceed. Each kind implies its recovery: a confirmation is
- * obtained by asking the user, missing evidence by a lookup or a question, an invalid input
- * by a different one; a policy denial or unavailable tool is explained rather than retried.
- */
-export type BlockerKind =
-  | 'needs_confirmation'
-  | 'missing_evidence'
-  | 'policy_denied'
-  | 'invalid_input'
-  | 'duplicate'
-  | 'unavailable'
-  | 'completion_refused'
-  | 'no_progress';
 
 export interface Blocker {
   id: string;
   cycle: number;
-  kind: BlockerKind;
   tool?: string;
   stepId?: string;
-  /** The input of the attempt that was blocked, when there was one. */
-  input?: unknown;
   reason: string;
-  /** What would resolve it. */
-  resolution: string;
 }
 
 export interface StepVerification {
@@ -147,8 +99,6 @@ export interface ExecutionState {
   reducerVersion: number;
   cycle: number;
   stepsUsed: number;
-  taskState?: TaskState;
-  /** @deprecated Use taskState. */
   plan?: Plan;
   planRevisions: number;
   stepStatuses: Record<string, StepStatus>;
@@ -175,10 +125,7 @@ export interface AgentMetadata {
 export interface DecisionRecord {
   id: string;
   cycle: number;
-  action:
-    | { type: 'tool'; tool: string; stepId?: string }
-    | { type: 'complete_step'; stepId?: string }
-    | { type: 'respond'; outcome: 'completed' | 'needs_input' | 'blocked' };
+  action: { type: 'tool'; tool: string; stepId?: string } | { type: 'respond'; outcome: 'completed' | 'needs_input' | 'blocked' };
   rationale?: string;
   confidence?: number;
   probabilities?: Record<string, number>;
@@ -190,28 +137,12 @@ export interface PlanRecord {
   cycle: number;
   planId: string;
   version: number;
-  kind: Plan['kind'];
   objective: string;
-  constraints?: string[];
-  knownFacts?: KnownFact[];
-  steps: {
-    id: string;
-    objective: string;
-    dependencies: string[];
-    constraints: string[];
-    completionCriteria: string;
-    evidence: string[];
-  }[];
-  sourceCallId?: string;
+  steps: { id: string; objective: string; dependencies: string[] }[];
+  sourceCallId: string;
   previousVersion?: number;
   invalidatedStepIds: string[];
   carriedStatuses: Record<string, StepStatus>;
-}
-
-export interface KnownFactRecord {
-  id: string;
-  cycle: number;
-  fact: KnownFact;
 }
 
 export interface VerificationRecord {
@@ -226,16 +157,7 @@ export interface BlockerRecord extends Blocker {}
 export interface TransitionRecord {
   id: string;
   cycle: number;
-  kind:
-    | 'cycle-start'
-    | 'limit'
-    | 'cancelled'
-    | 'error'
-    | 'finish'
-    | 'policy-block'
-    | 'blocked-completion'
-    | 'authorized'
-    | 'response-repair';
+  kind: 'cycle-start' | 'limit' | 'cancelled' | 'error' | 'finish' | 'policy-block' | 'blocked-completion';
   detail?: string;
   stopReason?: StopReason;
 }
@@ -243,7 +165,6 @@ export interface TransitionRecord {
 export type AgentDataParts = {
   decision: DecisionRecord;
   plan: PlanRecord;
-  fact: KnownFactRecord;
   verification: VerificationRecord;
   blocker: BlockerRecord;
   transition: TransitionRecord;

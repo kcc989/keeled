@@ -45,7 +45,6 @@ describe('registerTools', () => {
 
   test('rejects reserved names', () => {
     expect(() => registerTools({ 'respond:completed': search })).toThrow(/reserved/);
-    expect(() => registerTools({ 'step:complete': search })).toThrow(/reserved/);
   });
 
   test('rejects provider-executed tools', () => {
