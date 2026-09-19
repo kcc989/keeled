@@ -6,6 +6,7 @@ export type { RespondAdapter, RespondContext } from './execution.ts';
 
 export { agentTool, agentToolBrand, isAgentTool, registerTools } from './tool.ts';
 export type {
+  ActionIntent,
   AgentContext,
   AgentTool,
   AgentToolExecutionOptions,
@@ -15,36 +16,43 @@ export type {
   AnyAgentTool,
   InferAgentUITools,
   RegisteredTool,
+  RepeatPolicy,
   SdkToolProjection,
 } from './tool.ts';
 
-export { planningTool } from './planning.ts';
-export type { PlanningToolOptions } from './planning.ts';
-
-export {
-  adoptProposal,
-  dependenciesSatisfied,
-  parsePlanProposal,
-  planProposalSchema,
-  planStepProposalSchema,
-  readySteps,
-} from './plan.ts';
-export type { Plan, PlanProposal, PlanStep, StepStatus } from './plan.ts';
+export { evidenceTool } from './evidence.ts';
+export { candidatesFor, factIndex, factType } from './facts.ts';
+export type { Fact, UserStatement } from './facts.ts';
+export type { EvidencePage } from './evidence.ts';
 
 export { parseRespondLabel, respondLabels } from './controller.ts';
 export type {
+  Authorization,
+  AwaitingAction,
   AvailableTool,
   BudgetView,
   Controller,
   ControllerContext,
+  ControlResult,
   ControllerDecision,
+  Judgement,
   NextAction,
-  ProgressAssessment,
+  PendingAction,
   RespondLabel,
 } from './controller.ts';
 
-export { emptyState, reduceState, reducerVersion, statusesFor } from './state.ts';
-export { digestObservations, digestPlan, digestState, latestRequest, projectMessages } from './projection.ts';
+export { emptyState, reduceState, reducerVersion } from './state.ts';
+export {
+  awaitingConfirmation,
+  callHistory,
+  defaultResultBudget,
+  presentResult,
+  digestObservations,
+  digestState,
+  latestRequest,
+  projectMessages,
+} from './projection.ts';
+export type { CallRecord } from './projection.ts';
 export { GenerationHost } from './generation.ts';
 
 export {
@@ -52,8 +60,8 @@ export {
   ConfigurationError,
   HarnessError,
   InputResolutionError,
+  MissingInformation,
   PersistenceError,
-  PlanValidationError,
   ToolRegistrationError,
 } from './errors.ts';
 
@@ -63,25 +71,20 @@ export type {
   AgentMetadata,
   AgentPolicy,
   AgentResult,
+  AuthorizationPolicy,
   Blocker,
+  BlockerKind,
   BlockerRecord,
-  CompletionBasis,
   DecisionRecord,
   ExecutionState,
-  GoalVerification,
   ManagedGeneration,
   ModelCallOptions,
   Observation,
-  PlanRecord,
   ResolvedPolicy,
   Risk,
   StateCheckpoint,
-  StepVerification,
   StopReason,
   TransitionRecord,
   UsageBucket,
   UsageTotals,
-  VerificationOutcome,
-  VerificationRecord,
-  VerificationSummary,
 } from './types.ts';

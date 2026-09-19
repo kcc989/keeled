@@ -7,7 +7,7 @@ import { agentTool } from '../src/tool.ts';
 import type { AgentDataParts, AgentMetadata } from '../src/types.ts';
 import type { AgentContext, InferAgentUITools } from '../src/tool.ts';
 import { scriptedController, stubModel, userMessage } from '../src/testing.ts';
-import { firstPlan, revisedPlan, scriptedPlanner, searchTool } from './fixtures.ts';
+import { searchTool } from './fixtures.ts';
 
 const model = stubModel({ text: 'Done.' });
 
@@ -91,7 +91,7 @@ describe('execution context', () => {
           { type: 'tool', tool: 'plain' },
           { type: 'respond', outcome: 'completed' },
         ],
-        assess: { goalMet: true },
+
       }),
       model: stubModel({ text: 'Done.', objects: [{}] }),
       tools: { inspected, plain },
@@ -106,69 +106,12 @@ describe('execution context', () => {
   });
 });
 
-describe('plan replacement', () => {
-  test('invalidates verification for steps the revision changed', async () => {
-    const controller = scriptedController({
-      decisions: [
-        { type: 'tool', tool: 'plan' },
-        { type: 'tool', tool: 'search', stepId: 'locate' },
-        { type: 'tool', tool: 'plan' },
-        { type: 'respond', outcome: 'needs_input' },
-      ],
-      assess: context => ({
-        steps: {
-          locate: { complete: true },
-          edit: { complete: context.state.planRevisions === 1 },
-          verify: { complete: false },
-        },
-        goalMet: false,
-      }),
-    });
-
-    const agent = createAgent({
-      instructions: 'Do the change.',
-      controller,
-      model,
-      tools: { plan: scriptedPlanner([firstPlan, revisedPlan]), search: searchTool() },
-      planningTool: 'plan',
-    });
-
-    const result = await agent.run({ messages: [userMessage('Change it.')] });
-    const last = result.messages.at(-1)!;
-    const plans = last.parts.filter(part => part.type === 'data-plan') as {
-      data: { invalidatedStepIds: string[] };
-    }[];
-
-    expect(plans).toHaveLength(2);
-    expect(plans[1]?.data.invalidatedStepIds).toEqual(['edit']);
-
-    // Reducing up to the revision shows the stale result was dropped, not carried.
-    const revisionIndex = last.parts.lastIndexOf(plans[1] as never);
-    const atRevision = reduceState([
-      { ...last, parts: last.parts.slice(0, revisionIndex + 1) },
-    ]);
-    expect(atRevision.verification['edit']).toBeUndefined();
-    expect(atRevision.verification['locate']?.planVersion).toBe(1);
-
-    // The next cycle re-evaluates it against the new revision.
-    expect(result.state.verification['edit']?.planVersion).toBe(2);
-    expect(result.state.verification['locate']?.outcome).toBe('passed');
-  });
-});
-
 describe('terminal paths', () => {
   test('a controller failure ends the turn as an error with a response', async () => {
     const failing = {
       name: 'failing',
-      async decide() {
+      async control() {
         throw new Error('controller unavailable');
-      },
-      async assess() {
-        return {
-          steps: {},
-          goalMet: { complete: false, confidence: 1 },
-          planValid: { valid: true, confidence: 1 },
-        };
       },
     };
 
@@ -191,7 +134,7 @@ describe('terminal paths', () => {
         instructions: 'Answer the question.',
         controller: scriptedController({
           decisions: [{ type: 'respond', outcome }],
-          assess: { goalMet: true },
+
         }),
         model,
         tools: { search: searchTool() },
@@ -207,7 +150,7 @@ describe('terminal paths', () => {
       instructions: 'Answer the question.',
       controller: scriptedController({
         decisions: [{ type: 'respond', outcome: 'completed' }],
-        assess: { goalMet: true },
+
       }),
       model,
       tools: { search: searchTool() },

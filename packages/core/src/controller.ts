@@ -1,4 +1,3 @@
-import type { Plan, PlanStep, StepStatus } from './plan.ts';
 import type {
   AgentMessage,
   Blocker,
@@ -6,14 +5,14 @@ import type {
   Observation,
   Risk,
   UsageBucket,
-  VerificationSummary,
 } from './types.ts';
 
 export interface AvailableTool {
   name: string;
   description: string;
   risk: Risk;
-  isPlanningTool: boolean;
+  /** Names of the input's required top-level parameters, so a controller can judge readiness. */
+  required: string[];
 }
 
 export interface BudgetView {
@@ -28,19 +27,27 @@ export interface ControllerContext {
   readonly conversation: readonly AgentMessage[];
   readonly state: Readonly<ExecutionState>;
   readonly availableTools: readonly AvailableTool[];
-  readonly plan: Readonly<Plan> | undefined;
-  readonly readySteps: readonly PlanStep[];
-  readonly stepStatuses: Readonly<Record<string, StepStatus>>;
-  readonly verification: VerificationSummary | undefined;
   readonly observations: readonly Observation[];
   readonly blockers: readonly Blocker[];
+  /** Actions held for confirmation, in this turn or an earlier one, that have not run. */
+  readonly awaitingConfirmation: readonly AwaitingAction[];
   readonly budget: BudgetView;
   readonly abortSignal: AbortSignal;
 }
 
 export type NextAction<Name extends string = string> =
-  | { type: 'tool'; tool: Name; stepId?: string }
+  | {
+      type: 'tool';
+      tool: Name;
+    }
   | { type: 'respond'; outcome: 'completed' | 'needs_input' | 'blocked' };
+
+/** An action that was held for the user's confirmation and has not run since. */
+export interface AwaitingAction {
+  tool: string;
+  input: unknown;
+  reason: string;
+}
 
 export interface ControllerDecision<Name extends string = string> {
   action: NextAction<Name>;
@@ -50,17 +57,41 @@ export interface ControllerDecision<Name extends string = string> {
   usage?: UsageBucket;
 }
 
-export interface ProgressAssessment {
-  steps: Record<string, { complete: boolean; confidence: number }>;
-  goalMet: { complete: boolean; confidence: number };
-  planValid: { valid: boolean; confidence: number };
+/** One tool selection or reply. */
+export type ControlResult<Name extends string = string> = ControllerDecision<Name>;
+
+/** A tool call whose input is resolved and validated, awaiting authorization to run. */
+export interface PendingAction {
+  tool: string;
+  description: string;
+  risk: Risk;
+  input: unknown;
+}
+
+export interface Judgement {
+  value: boolean;
+  confidence: number;
+}
+
+export interface Authorization {
+  /** The instructions and evidence clearly permit the action. */
+  permitted: Judgement;
+  /** Deciding whether it is permitted needs calculation or detailed comparison. */
+  needsVerification: Judgement;
+  /** Any confirmation the instructions require for the action has been given. */
+  confirmed: Judgement;
   usage?: UsageBucket;
 }
 
 export interface Controller {
   readonly name: string;
-  decide(context: ControllerContext): Promise<ControllerDecision>;
-  assess(context: ControllerContext): Promise<ProgressAssessment>;
+  /** Selects the next tool or a reply. */
+  control(context: ControllerContext): Promise<ControlResult>;
+  /**
+   * Judges a pending call before it runs, for risks listed in `policy.authorization.risks`.
+   * A controller without it authorizes nothing, and those calls run as before.
+   */
+  authorize?(context: ControllerContext, action: PendingAction): Promise<Authorization>;
 }
 
 export const respondLabels = {

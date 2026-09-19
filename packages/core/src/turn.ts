@@ -1,21 +1,19 @@
 import type { InferUIMessageChunk, UIMessageStreamWriterWithOutcome } from 'ai';
 import { createId, stableHash } from './ids.ts';
 import { errorMessage, isAbortError } from './errors.ts';
-import { readySteps, type Plan, type StepStatus } from './plan.ts';
-import { reduceState, statusesFor } from './state.ts';
-import type { AvailableTool, ControllerContext, ControllerDecision } from './controller.ts';
+import { reduceState } from './state.ts';
+import { awaitingConfirmation } from './projection.ts';
+import { type AvailableTool, type ControllerContext, type ControllerDecision } from './controller.ts';
 import type {
   AgentMessage,
+  BlockerKind,
   BlockerRecord,
   DecisionRecord,
   ExecutionState,
-  PlanRecord,
   ResolvedPolicy,
   StopReason,
   TransitionRecord,
   UsageTotals,
-  VerificationRecord,
-  VerificationSummary,
 } from './types.ts';
 
 type Chunk = InferUIMessageChunk<AgentMessage>;
@@ -30,17 +28,23 @@ export interface TurnOptions {
   writer: Writer;
   usage: UsageTotals;
   messageId: string;
+  /** Whether an attempt with this tool is exempt from repetition checks, as polling. */
+  isExempt?: (tool: string) => boolean;
 }
 
 interface AttemptSignature {
   signature: string;
-  observationCount: number;
+  /** Distinct evidence when the attempt was decided. */
+  evidence: number;
+  /** A polling attempt within its time limit, which repetition does not count against. */
+  exempt: boolean;
 }
 
 export class Turn {
   readonly #options: TurnOptions;
   readonly #parts: AgentMessage['parts'] = [];
   readonly #attempts: AttemptSignature[] = [];
+  #reportedThrough = 0;
   #state: ExecutionState;
   #finalState: ExecutionState | undefined;
   #cycle = 0;
@@ -60,16 +64,8 @@ export class Turn {
     return this.#cycle;
   }
 
-  get plan(): Plan | undefined {
-    return this.state.plan;
-  }
-
   get partialText(): string {
     return this.#partialText;
-  }
-
-  get stepStatuses(): Record<string, StepStatus> {
-    return statusesFor(this.state.plan, this.state.stepStatuses);
   }
 
   hasWorkBudget(): boolean {
@@ -94,23 +90,18 @@ export class Turn {
   }
 
   decisionContext(
-    verification: VerificationSummary | undefined,
     availableTools: readonly AvailableTool[],
   ): ControllerContext {
-    const plan = this.#state.plan;
-    const statuses = this.stepStatuses;
+    const conversation = this.#conversation();
     return {
       request: this.#options.request,
       instructions: this.#options.instructions,
-      conversation: this.#conversation(),
+      conversation,
       state: this.#state,
       availableTools,
-      plan,
-      readySteps: plan === undefined ? [] : readySteps(plan, statuses),
-      stepStatuses: statuses,
-      verification,
       observations: this.#state.observations,
       blockers: this.#state.blockers,
+      awaitingConfirmation: awaitingConfirmation(conversation),
       budget: {
         stepsUsed: this.#state.stepsUsed,
         maxSteps: this.#options.policy.maxSteps,
@@ -132,55 +123,35 @@ export class Turn {
     };
     this.#record({ type: 'data-decision', id: record.id, data: record });
     if (decision.usage !== undefined) this.#accountController(decision.usage);
-    if (decision.action.type === 'tool') {
-      this.#pushAttempt(decision.action.tool, decision.action.stepId);
-    }
     return record;
   }
 
-  recordVerification(summary: VerificationSummary): void {
-    const record: VerificationRecord = {
-      id: createId('ver'),
-      cycle: this.#cycle,
-      planVersion: this.#state.plan?.version,
-      summary,
-    };
-    this.#record({ type: 'data-verification', id: record.id, data: record });
+  /** Records a tool attempt after its input is known, so different calls stay distinct. */
+  recordToolAttempt(tool: string, input: unknown): void {
+    this.#attempts.push({
+      signature: stableHash({ tool, input }),
+      evidence: this.#distinctEvidence(),
+      exempt: this.#options.isExempt?.(tool) ?? false,
+    });
   }
 
-  recordPlan(record: Omit<PlanRecord, 'id' | 'cycle'>): void {
-    const full: PlanRecord = { ...record, id: createId('plan'), cycle: this.#cycle };
-    this.#record({ type: 'data-plan', id: full.id, data: full });
-  }
-
-  recordBlocker(reason: string, details?: { tool?: string; stepId?: string }): BlockerRecord {
+  recordBlocker(
+    kind: BlockerKind,
+    reason: string,
+    resolution: string,
+    details?: { tool?: string; input?: unknown },
+  ): BlockerRecord {
     const record: BlockerRecord = {
       id: createId('blk'),
       cycle: this.#cycle,
+      kind,
       tool: details?.tool,
-      stepId: details?.stepId,
+      ...(details?.input === undefined ? {} : { input: details.input }),
       reason,
+      resolution,
     };
     this.#record({ type: 'data-blocker', id: record.id, data: record });
     return record;
-  }
-
-  recordBlockedCompletion(verification: VerificationSummary | undefined): void {
-    const reasons: string[] = [];
-    if (verification !== undefined) {
-      for (const [stepId, step] of Object.entries(verification.steps)) {
-        if (step.outcome !== 'passed') reasons.push(`step "${stepId}" is ${step.outcome}`);
-      }
-      if (verification.goal.outcome !== 'passed') {
-        reasons.push(`the goal is ${verification.goal.outcome}`);
-      }
-    }
-    const detail =
-      reasons.length > 0
-        ? `Completion was requested but ${reasons.join(', ')}.`
-        : 'Completion was requested but progress does not support it.';
-    this.#transition({ kind: 'blocked-completion', detail });
-    this.recordBlocker(detail);
   }
 
   recordRuntimeError(error: unknown): void {
@@ -244,17 +215,50 @@ export class Turn {
     this.#write({ type: 'finish' });
   }
 
-  isRepeatingWithoutProgress(): boolean {
+  /**
+   * Whether recent attempts are going nowhere: the same action repeated, or two actions
+   * alternating, with no new distinct evidence meanwhile. Identical results and blocked
+   * attempts are not evidence. Attempts exempt as polling are ignored, and a window already
+   * reported is not reported again.
+   */
+  detectNoProgress(): 'repeating' | 'alternating' | undefined {
     const limit = this.#options.policy.repeatLimit;
-    if (this.#attempts.length < limit) return false;
-    const recent = this.#attempts.slice(-limit);
-    const first = recent[0];
-    if (first === undefined) return false;
-    return recent.every(
-      attempt =>
-        attempt.signature === first.signature &&
-        attempt.observationCount === first.observationCount,
-    );
+    const attempts = this.#attempts.slice(this.#reportedThrough).filter(attempt => !attempt.exempt);
+    const unchanged = (window: AttemptSignature[]) =>
+      window.length > 0 && window.every(attempt => attempt.evidence === window[0]!.evidence);
+
+    const repeated = attempts.slice(-limit);
+    if (
+      repeated.length === limit &&
+      unchanged(repeated) &&
+      repeated.every(attempt => attempt.signature === repeated[0]!.signature)
+    ) {
+      return 'repeating';
+    }
+    const alternated = attempts.slice(-limit * 2);
+    if (
+      alternated.length === limit * 2 &&
+      unchanged(alternated) &&
+      new Set(alternated.map(attempt => attempt.signature)).size === 2
+    ) {
+      return 'alternating';
+    }
+    return undefined;
+  }
+
+  /** The conversation including the message being written for this turn. */
+  get conversation(): AgentMessage[] {
+    return this.#conversation();
+  }
+
+  /** Distinct domain evidence so far, ignoring identical repeats. */
+  distinctEvidence(): number {
+    return this.#distinctEvidence();
+  }
+
+  /** Starts a fresh window after a report, so the next detection needs new repetition. */
+  markNoProgressReported(): void {
+    this.#reportedThrough = this.#attempts.length;
   }
 
   accountController(usage: { calls: number; inputTokens: number; outputTokens: number }): void {
@@ -268,11 +272,15 @@ export class Turn {
     bucket.outputTokens += usage.outputTokens;
   }
 
-  #pushAttempt(tool: string, stepId: string | undefined): void {
-    this.#attempts.push({
-      signature: stableHash({ tool, stepId }),
-      observationCount: this.#state.observations.length,
-    });
+  /** Distinct tool outcomes so far. */
+  #distinctEvidence(): number {
+    const distinct = new Set<string>();
+    for (const observation of this.#state.observations) {
+      if (observation.kind === 'tool-result' || observation.kind === 'tool-error') {
+        distinct.add(stableHash([observation.kind, observation.tool, observation.input, observation.detail, observation.summary]));
+      }
+    }
+    return distinct.size;
   }
 
   #conversation(): AgentMessage[] {
@@ -300,8 +308,6 @@ export class Turn {
 function toPart(chunk: Chunk, parts: AgentMessage['parts']): AgentMessage['parts'][number] | undefined {
   switch (chunk.type) {
     case 'data-decision':
-    case 'data-plan':
-    case 'data-verification':
     case 'data-blocker':
     case 'data-transition':
       return chunk as AgentMessage['parts'][number];

@@ -1,31 +1,48 @@
-import { digestPlan, type ControllerContext } from '@keeled/core';
+import { presentResult, type ControllerContext } from '@keeled/core';
 import type { JsonValue } from '@typesafe-ai/sdk';
+import { callHistory } from './history.ts';
+
+/** Per-result size for the state document; larger results are paged, never cut. */
+const resultBudget = 4_000;
 
 /** The state document Jev evaluates. It is data, never instructions. */
 export function controllerState(context: ControllerContext): { [key: string]: JsonValue } {
   return {
-    original_request: context.request,
+    latest_user_message: context.request,
     agent_instructions: context.instructions,
-    plan: context.plan === undefined ? null : digestPlan(context.plan, context.stepStatuses),
-    ready_steps: context.readySteps.map(step => ({ id: step.id, objective: step.objective })),
-    step_statuses: context.stepStatuses,
-    evidence: context.observations.slice(-12).map(observation => ({
-      kind: observation.kind,
-      tool: observation.tool ?? null,
-      summary: observation.summary,
-      detail: truncate(observation.detail),
+    // Tool calls in the order they were made, each with its reference, input, and result.
+    // A large result appears as a page of complete records with its omissions stated.
+    tool_calls: callHistory(context)
+      .slice(-30)
+      .map(call => ({
+        ref: call.ref,
+        turn: call.turn,
+        tool: call.tool,
+        input: jsonValue(call.input),
+        outcome: call.outcome,
+        result: jsonValue(presentResult(call.result, call.ref, resultBudget)),
+      })),
+    // Everything else the turn has observed: blocked attempts and input errors.
+    evidence: context.observations
+      .filter(observation => observation.kind !== 'tool-result' && observation.kind !== 'tool-error')
+      .slice(-12)
+      .map(observation => ({
+        kind: observation.kind,
+        tool: observation.tool ?? null,
+        summary: observation.summary,
+        detail: jsonValue(presentResult(observation.detail, observation.id, resultBudget)),
+      })),
+    awaiting_confirmation: context.awaitingConfirmation.map(held => ({
+      tool: held.tool,
+      input: jsonValue(held.input),
+      reason: held.reason,
     })),
-    blockers: context.blockers.slice(-6).map(blocker => blocker.reason),
-    verification:
-      context.verification === undefined
-        ? null
-        : {
-            basis: context.verification.basis,
-            goal: context.verification.goal.outcome,
-            steps: Object.fromEntries(
-              Object.entries(context.verification.steps).map(([id, step]) => [id, step.outcome]),
-            ),
-          },
+    blockers: context.blockers.slice(-6).map(blocker => ({
+      kind: blocker.kind,
+      tool: blocker.tool ?? null,
+      reason: blocker.reason,
+      resolution: blocker.resolution,
+    })),
     budget: context.budget,
     transcript: context.conversation
       .flatMap(message =>
@@ -37,13 +54,6 @@ export function controllerState(context: ControllerContext): { [key: string]: Js
   } as unknown as { [key: string]: JsonValue };
 }
 
-function truncate(value: unknown, max = 600): JsonValue {
-  if (value === undefined) return null;
-  let json: string;
-  try {
-    json = JSON.stringify(value) ?? 'null';
-  } catch {
-    return String(value);
-  }
-  return json.length <= max ? (value as JsonValue) : `${json.slice(0, max)}…`;
+function jsonValue(value: unknown): JsonValue {
+  return value === undefined ? null : (value as JsonValue);
 }

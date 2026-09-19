@@ -6,7 +6,7 @@
  * AI SDK gateway resolves. The harness itself is provider-agnostic: `model`
  * accepts any AI SDK LanguageModel.
  */
-import { createAgent, planningTool } from '@keeled/core';
+import { createAgent } from '@keeled/core';
 import { jev } from '@keeled/jev';
 import { Repo } from './repo.ts';
 import { buildTools } from './tools.ts';
@@ -29,8 +29,8 @@ const agent = createAgent({
   instructions: 'Complete the requested change and verify the result.',
   controller: jev(),
   model: modelId,
-  tools: { plan: planningTool(), ...buildTools(repo) },
-  planningTool: 'plan',
+  tools: buildTools(repo),
+
   policy: { maxSteps: 20 },
 });
 
@@ -45,6 +45,6 @@ const result = await agent.run({
 });
 
 console.log(`stop reason: ${result.stopReason}`);
-console.log(`plan revision: ${result.plan?.version ?? 0}`);
+
 console.log(`usage: ${JSON.stringify(result.usage)}`);
 console.log(`\n${result.text}`);
