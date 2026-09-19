@@ -16,9 +16,19 @@ import type {
   Risk,
   UIToolProjection,
 } from './types.ts';
-import type { Plan } from './plan.ts';
+import type { Plan, PlanStep } from './plan.ts';
 
 export const agentToolBrand = Symbol.for('keeled.agent-tool');
+
+/** What the controller selected a tool call for, carried into its input resolution. */
+export interface ActionIntent {
+  tool: string;
+  objective?: string;
+  /** References of earlier results the call builds on or should not repeat. */
+  evidence?: string[];
+  /** Input of the same tool's action held for the user's confirmation, if any. */
+  awaitingInput?: unknown;
+}
 
 export interface AgentContext {
   readonly instructions: string;
@@ -26,8 +36,18 @@ export interface AgentContext {
   readonly conversation: AgentMessage[];
   readonly messages: ModelMessage[];
   readonly state: Readonly<ExecutionState>;
+  readonly taskState: Readonly<Plan> | undefined;
+  /** @deprecated Use taskState. */
   readonly plan: Readonly<Plan> | undefined;
+  readonly goalId: string | undefined;
+  /** @deprecated Use goalId. */
   readonly stepId: string | undefined;
+  /** The current goal, including completion criteria and evidence. */
+  readonly currentGoal: Readonly<PlanStep> | undefined;
+  /** @deprecated Use currentGoal. */
+  readonly planStep: Readonly<PlanStep> | undefined;
+  /** The action being resolved or executed, as the controller selected it. */
+  readonly action: ActionIntent | undefined;
   readonly abortSignal: AbortSignal;
   readonly generateText: ManagedGeneration['generateText'];
   readonly generateObject: ManagedGeneration['generateObject'];
@@ -39,11 +59,25 @@ export interface AgentToolExecutionOptions<CONTEXT = unknown>
 
 export type AgentAvailability = (context: AgentContext) => boolean | PromiseLike<boolean>;
 
+/**
+ * How the runtime may treat repeated calls within one turn. `allow` runs every call, and a
+ * tool repeated with no new evidence is reported as making no progress. `reuse` declares
+ * that a result stays valid until a state-changing call succeeds, so an identical repeat
+ * before then is not run and the agent is pointed at the result it already has. `poll`
+ * declares that repeating is the point, as when waiting on external state: repetition is
+ * not held against it until `pollTimeoutMs` has passed since its first call in the turn.
+ */
+export type RepeatPolicy = 'allow' | 'reuse' | 'poll';
+
 export interface AgentToolSpec<SCHEMA extends FlexibleSchema<any>, OUTPUT> {
   description: string;
   inputSchema: SCHEMA;
   outputSchema?: FlexibleSchema<OUTPUT>;
   risk?: Risk;
+  /** Defaults to `allow`. */
+  repeat?: RepeatPolicy;
+  /** For `poll` tools, how long repetition is exempt from progress checks. Defaults to 60 seconds. */
+  pollTimeoutMs?: number;
   model?: LanguageModel;
   available?: AgentAvailability;
   resolveInput?: (context: AgentContext) => InferSchema<SCHEMA> | PromiseLike<InferSchema<SCHEMA>>;
@@ -56,6 +90,8 @@ export interface AgentToolSpec<SCHEMA extends FlexibleSchema<any>, OUTPUT> {
 export interface AgentToolExtensions<INPUT, OUTPUT> {
   readonly [agentToolBrand]: true;
   readonly risk: Risk;
+  readonly repeat: RepeatPolicy;
+  readonly pollTimeoutMs?: number;
   readonly model?: LanguageModel;
   readonly available?: AgentAvailability;
   readonly resolveInput?: (context: AgentContext) => INPUT | PromiseLike<INPUT>;
@@ -77,8 +113,8 @@ export type AgentTool<INPUT = any, OUTPUT = any> = Omit<
 export function agentTool<const SCHEMA extends FlexibleSchema<any>, OUTPUT>(
   spec: AgentToolSpec<SCHEMA, OUTPUT>,
 ): AgentTool<InferSchema<SCHEMA>, Awaited<OUTPUT>> {
-  const { risk = 'unknown', ...rest } = spec;
-  return { ...rest, risk, [agentToolBrand]: true } as unknown as AgentTool<
+  const { risk = 'unknown', repeat = 'allow', ...rest } = spec;
+  return { ...rest, risk, repeat, [agentToolBrand]: true } as unknown as AgentTool<
     InferSchema<SCHEMA>,
     Awaited<OUTPUT>
   >;
@@ -121,6 +157,8 @@ export interface RegisteredTool {
   inputSchema: FlexibleSchema<any>;
   outputSchema?: FlexibleSchema<any>;
   risk: Risk;
+  repeat: RepeatPolicy;
+  pollTimeoutMs?: number;
   model?: LanguageModel;
   kind: 'agent' | 'sdk';
   available?: AgentAvailability;
@@ -128,13 +166,14 @@ export interface RegisteredTool {
   invoke: (input: unknown, options: AgentToolExecutionOptions) => unknown | PromiseLike<unknown>;
 }
 
-const reservedPrefix = 'respond:';
+const reservedPrefixes = ['respond:', 'step:'] as const;
 
 export function registerTools(tools: AgentToolSet): Map<string, RegisteredTool> {
   const registry = new Map<string, RegisteredTool>();
 
   for (const [name, tool] of Object.entries(tools)) {
-    if (name.startsWith(reservedPrefix)) {
+    const reservedPrefix = reservedPrefixes.find(prefix => name.startsWith(prefix));
+    if (reservedPrefix !== undefined) {
       throw new ToolRegistrationError(`Tool name "${name}" uses the reserved "${reservedPrefix}" prefix.`);
     }
     registry.set(name, register(name, tool));
@@ -177,6 +216,8 @@ function register(name: string, tool: AnyAgentTool | Tool<any, any, any>): Regis
       inputSchema: tool.inputSchema,
       outputSchema: tool.outputSchema,
       risk: tool.risk,
+      repeat: tool.repeat,
+      pollTimeoutMs: tool.pollTimeoutMs,
       model: tool.model,
       kind: 'agent',
       available: tool.available,
@@ -196,6 +237,7 @@ function register(name: string, tool: AnyAgentTool | Tool<any, any, any>): Regis
     inputSchema: record['inputSchema'] as FlexibleSchema<any>,
     outputSchema: record['outputSchema'] as FlexibleSchema<any> | undefined,
     risk: 'unknown',
+    repeat: 'allow',
     kind: 'sdk',
     invoke: (input, options) =>
       sdkExecute(input, {

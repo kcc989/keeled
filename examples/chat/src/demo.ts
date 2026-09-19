@@ -22,7 +22,7 @@ const tools = buildTools(repo);
 const plans = [
   {
     objective: 'Rename the price helper and leave the suite passing',
-    steps: [
+    goals: [
       { id: 'locate', objective: 'Find the file that defines the price helper', dependencies: [] },
       { id: 'rename', objective: 'Rename the helper to formatPrice', dependencies: ['locate'] },
       { id: 'verify', objective: 'Run the tests', dependencies: ['rename'] },
@@ -30,7 +30,7 @@ const plans = [
   },
   {
     objective: 'Rename the price helper and leave the suite passing',
-    steps: [
+    goals: [
       { id: 'locate', objective: 'Find the file that defines the price helper', dependencies: [] },
       {
         id: 'rename',
@@ -115,7 +115,9 @@ for await (const chunk of execution) {
     console.log(
       action.type === 'tool'
         ? `  decide  -> tool ${action.tool}${action.stepId ? ` (step ${action.stepId})` : ''}`
-        : `  decide  -> respond ${action.outcome}`,
+        : action.type === 'complete_step'
+          ? `  decide  -> complete step ${action.stepId ?? ''}`
+          : `  decide  -> respond ${action.outcome}`,
     );
   } else if (chunk.type === 'data-plan') {
     console.log(`  plan    -> revision ${chunk.data.version}: ${chunk.data.objective}`);

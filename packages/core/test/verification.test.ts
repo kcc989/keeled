@@ -9,7 +9,7 @@ import type { PlanProposal } from '../src/plan.ts';
 
 const twoSteps: PlanProposal = {
   objective: 'Two dependent steps',
-  steps: [
+  goals: [
     { id: 'a', objective: 'Do A', dependencies: [] },
     { id: 'b', objective: 'Do B', dependencies: ['a'] },
   ],
@@ -55,13 +55,12 @@ const walkThrough = [
 
 describe('non-monotonic assessment', () => {
   test('a confidence dip does not un-complete a verified step', async () => {
-    let cycle = 0;
     const agent = createAgent({
       instructions: 'Do the work.',
       controller: scriptedController({
         decisions: [...walkThrough],
-        assess: () => {
-          cycle += 1;
+        assess: context => {
+          const cycle = context.state.cycle + 1;
           // Step a verifies, then its confidence collapses below the floor.
           return {
             steps: {
@@ -87,21 +86,27 @@ describe('non-monotonic assessment', () => {
   });
 
   test('a goal that passed is not withdrawn by a later uncertain pass', async () => {
-    let cycle = 0;
+    const oneStep: PlanProposal = {
+      objective: 'One step',
+      goals: [{ id: 'a', objective: 'Do A', dependencies: [] }],
+    };
+    let assessed = 0;
     const agent = createAgent({
       instructions: 'Do the work.',
       controller: scriptedController({
         decisions: [
-          { type: 'tool', tool: 'work' },
+          { type: 'tool', tool: 'plan' },
+          { type: 'tool', tool: 'work', stepId: 'a' },
           { type: 'respond', outcome: 'completed' },
         ],
         assess: () => {
-          cycle += 1;
-          return { goalMet: true, goalConfidence: cycle >= 2 ? 0.2 : 1 };
+          assessed += 1;
+          return { steps: { a: { complete: true } }, goalMet: true, goalConfidence: assessed >= 2 ? 0.2 : 1 };
         },
       }),
       model,
-      tools: { work },
+      tools: { plan: planner(oneStep), work },
+      planningTool: 'plan',
       policy: { maxSteps: 8 },
     });
 
@@ -110,7 +115,7 @@ describe('non-monotonic assessment', () => {
     expect(result.state.goal?.outcome).toBe('passed');
   });
 
-  test('an evidence-backed failure still regresses a completed step', async () => {
+  test('a crossed-off step stays complete until a plan revision changes it', async () => {
     let cycle = 0;
     const agent = createAgent({
       instructions: 'Do the work.',
@@ -118,7 +123,7 @@ describe('non-monotonic assessment', () => {
         decisions: [...walkThrough],
         assess: () => {
           cycle += 1;
-          // Confident that a is no longer complete: that is evidence, not absence.
+          // Legacy assessments cannot silently reopen a crossed-off step.
           return {
             steps: {
               a: { complete: cycle < 4, confidence: 1 },
@@ -135,15 +140,15 @@ describe('non-monotonic assessment', () => {
     });
 
     const result = await agent.run({ messages: [userMessage('go')] });
-    expect(result.state.stepStatuses['a']).toBe('pending');
-    expect(result.state.verification['a']?.outcome).toBe('failed');
-    expect(result.stopReason).toBe('blocked');
+    expect(result.state.stepStatuses['a']).toBe('done');
+    expect(result.state.verification['a']?.outcome).toBe('passed');
+    expect(result.stopReason).toBe('completed');
   });
 
   test('a plan revision still invalidates the result it changed', async () => {
     const revised: PlanProposal = {
       objective: 'Two dependent steps',
-      steps: [
+      goals: [
         { id: 'a', objective: 'Do A differently', dependencies: [] },
         { id: 'b', objective: 'Do B', dependencies: ['a'] },
       ],
@@ -162,28 +167,22 @@ describe('non-monotonic assessment', () => {
       controller: scriptedController({
         decisions: [
           { type: 'tool', tool: 'plan' },
-          { type: 'tool', tool: 'work', stepId: 'a' },
+          { type: 'complete_step' },
+          { type: 'tool', tool: 'failing' },
           { type: 'tool', tool: 'plan' },
           { type: 'respond', outcome: 'needs_input' },
         ],
-        assess: context => ({
-          steps: {
-            a: { complete: context.state.plan?.version === 1, confidence: 1 },
-            b: { complete: false, confidence: 1 },
-          },
-          goalMet: false,
-        }),
       }),
       model,
-      tools: { plan: revising, work },
+      tools: { plan: revising, failing },
       planningTool: 'plan',
       policy: { maxSteps: 10 },
     });
 
     const result = await agent.run({ messages: [userMessage('go')] });
     expect(result.plan?.version).toBe(2);
-    expect(result.state.verification['a']?.planVersion).toBe(2);
-    expect(result.state.verification['a']?.outcome).not.toBe('passed');
+    expect(result.state.verification['a']).toBeUndefined();
+    expect(result.state.stepStatuses['a']).toBe('pending');
   });
 });
 
@@ -240,7 +239,7 @@ describe('step attribution', () => {
     expect(errors[0]?.tool).toBe('failing');
   });
 
-  test('a call made outside any step carries no step', async () => {
+  test('a simple call is attributed to the implicit request step', async () => {
     const agent = createAgent({
       instructions: 'Do the work.',
       controller: scriptedController({
@@ -255,7 +254,69 @@ describe('step attribution', () => {
     });
 
     const result = await agent.run({ messages: [userMessage('go')] });
-    expect(observationsOf(result, 'work')[0]?.stepId).toBeUndefined();
+    const observation = observationsOf(result, 'work')[0];
+    expect(observation?.stepId).toBe('request');
+    expect(result.plan?.steps[0]?.evidence).toEqual(observation === undefined ? [] : [observation.id]);
+  });
+
+  test('input resolution receives the selected step and its execution contract', async () => {
+    const selected: unknown[] = [];
+    const inspectedWork = agentTool({
+      description: 'Inspect the selected step.',
+      inputSchema: z.object({}),
+      risk: 'read',
+      resolveInput: context => {
+        selected.push(context.planStep);
+        return {};
+      },
+      execute: () => ({ ok: true }),
+    });
+    const proposal: PlanProposal = {
+      objective: 'Make a constrained change',
+      goals: [
+        {
+          id: 'change',
+          objective: 'Change the export',
+          dependencies: [],
+          constraints: ['Keep the public name stable'],
+          completionCriteria: 'The export is changed and the public name is unchanged.',
+        },
+      ],
+    };
+    const agent = createAgent({
+      instructions: 'Do the work.',
+      controller: scriptedController({
+        decisions: [
+          { type: 'tool', tool: 'plan' },
+          { type: 'tool', tool: 'work', stepId: 'change' },
+          { type: 'respond', outcome: 'completed' },
+        ],
+        assess: context => ({
+          steps: {
+            change: {
+              complete: context.state.observations.some(o => o.kind === 'tool-result' && o.tool === 'work'),
+            },
+          },
+          goalMet: context.state.observations.some(o => o.kind === 'tool-result' && o.tool === 'work'),
+        }),
+      }),
+      model,
+      tools: { plan: planner(proposal), work: inspectedWork },
+      planningTool: 'plan',
+    });
+
+    const result = await agent.run({ messages: [userMessage('go')] });
+
+    expect(result.stopReason).toBe('completed');
+    expect(selected).toMatchObject([
+      {
+        id: 'change',
+        constraints: ['Keep the public name stable'],
+        completionCriteria: 'The export is changed and the public name is unchanged.',
+        evidence: [],
+      },
+    ]);
+    expect(result.plan?.steps[0]?.evidence).toHaveLength(1);
   });
 });
 
