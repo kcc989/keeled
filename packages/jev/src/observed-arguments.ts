@@ -83,6 +83,10 @@ export function jevObservedArguments(options: JevObservedArgumentOptions = {}): 
       usage: result.usage,
       ms: Math.round(performance.now() - started),
     });
-    return { ...(selectedDomain === undefined ? {} : { domainId: selectedDomain }), optionIds: selectedOptions };
+    return {
+      ...(selectedDomain === undefined ? {} : { domainId: selectedDomain }),
+      optionIds: selectedOptions,
+      sourceConfidence: source?.confidence ?? 0,
+    };
   };
 }

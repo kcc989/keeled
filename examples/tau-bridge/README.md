@@ -59,6 +59,12 @@ Candidates carry source references. Mutations and unknown-risk calls invalidate 
 sources; successful identical reads are omitted in the current turn. Candidate enumeration
 is bounded to 100 calls and depth 20; ordinary input resolution remains available.
 
+With `KEELED_OBSERVED_ARGUMENTS=1`, Jev runs only after the controller selects a read tool
+whose single required scalar argument still needs resolution. Judgments are cached by tool,
+argument, request, and source-evidence version. A selected source path is reused while its
+selected collection members are drained. Traces retain the evidence version, cache status,
+source path and confidence, selected observed options, and returned option.
+
 ## Endpoints
 
 | Method | Path | Body | Returns |
@@ -88,7 +94,7 @@ keep screening runs at one trial until a promising change warrants a larger eval
 | `TYPESAFE_API_KEY` | Keeled `.env` | Jev controller |
 | `OPENROUTER_API_KEY` | Keeled `.env` | Keeled's model calls |
 | `KEELED_MODEL` | Keeled `.env` | OpenRouter model id, e.g. `anthropic/claude-sonnet-4.5` |
-| `KEELED_OBSERVED_ARGUMENTS` | optional | Set to `1` to try Jev-selected, evidence-backed read arguments after exact projection finds none |
+| `KEELED_OBSERVED_ARGUMENTS` | optional | Set to `1` to try Jev-selected, evidence-backed read arguments after the controller selects an unresolved read tool |
 | `OPENROUTER_PROVIDERS` | optional | Provider order, default `together,modal`; no fallback beyond the list |
 | `OPENROUTER_API_KEY` | τ³-bench `.env` | User simulator |
 | `TAU2_USER_LLM` | optional | User simulator model, default `openrouter/openai/gpt-4.1` |

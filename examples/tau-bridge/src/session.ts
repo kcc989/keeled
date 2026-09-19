@@ -13,6 +13,8 @@ import {
   type ControllerDecision,
   type NextAction,
   type ObservedArgumentJudge,
+  type ObservedArgumentQuery,
+  type ObservedResolutionTrace,
   type PendingAction,
   type StopReason,
   type UsageTotals,
@@ -89,25 +91,34 @@ export class Session {
   constructor(options: SessionOptions) {
     this.#messages = (options.history ?? []).map(entry => textMessage(entry.role, entry.text));
     const trace = (entry: TraceEntry) => this.#trace.push(entry);
+    const judgmentMs = new WeakMap<ObservedArgumentQuery, number>();
     const observedArgumentJudge: ObservedArgumentJudge | undefined = options.observedArgumentJudge === undefined
       ? undefined
       : async (query, context) => {
           const started = performance.now();
           const result = await options.observedArgumentJudge!(query, context);
-          trace({
-            kind: 'observed-arguments',
-            ms: Math.round(performance.now() - started),
-            detail: {
-              tool: query.tool.name,
-              argument: query.argument.name,
-              domains: query.domains.length,
-              options: query.domains.reduce((count, domain) => count + domain.options.length, 0),
-              selectedDomain: result.domainId ?? null,
-              selectedOptions: result.optionIds.length,
-            },
-          });
+          judgmentMs.set(query, Math.round(performance.now() - started));
           return result;
         };
+    const observedResolution = (resolution: ObservedResolutionTrace) => trace({
+      kind: 'observed-arguments',
+      ms: judgmentMs.get(resolution.query) ?? 0,
+      detail: {
+        tool: resolution.query.tool.name,
+        argument: resolution.query.argument.name,
+        evidenceVersion: resolution.evidenceVersion,
+        cacheHit: resolution.cacheHit,
+        sourcePath: resolution.sourcePath ?? null,
+        sourceConfidence: resolution.sourceConfidence ?? null,
+        selectedOptions: resolution.selectedOptions.map(option => ({
+          id: option.id,
+          value: option.value,
+          path: option.path,
+          source: option.source,
+        })),
+        returnedOption: resolution.returnedOption?.id ?? null,
+      },
+    });
     this.#agent = createAgent({
       instructions: options.instructions,
       taskTracker: options.trackTasks === false ? undefined : modelTaskTracker({ extractionModel: options.argumentsModel }),
@@ -121,6 +132,7 @@ export class Session {
           options.argumentsModel === undefined ? undefined : options.argumentsModel,
           options.writeArgumentsModel === undefined ? undefined : options.writeArgumentsModel,
           observedArgumentJudge,
+          observedResolution,
         ),
         evidence: evidenceTool(),
         arithmetic: evidenceCalculationTool(),

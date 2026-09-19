@@ -20,6 +20,7 @@ export interface ObservedOption {
 export interface ObservedDomain {
   id: string;
   path: string;
+  sourceTool: string;
   description: string;
   options: readonly ObservedOption[];
 }
@@ -35,6 +36,7 @@ export interface ObservedArgumentQuery {
 export interface ObservedArgumentSelection {
   domainId?: string;
   optionIds: readonly string[];
+  sourceConfidence?: number;
 }
 
 export type ObservedArgumentJudge = (
@@ -48,6 +50,89 @@ export interface ObservedCandidateOptions {
   maxOptions?: number;
 }
 
+export interface ObservedResolutionTrace {
+  query: ObservedArgumentQuery;
+  evidenceVersion: string;
+  cacheHit: boolean;
+  sourcePath?: string;
+  sourceConfidence?: number;
+  selectedOptions: readonly ObservedOption[];
+  returnedOption?: ObservedOption;
+}
+
+export interface ObservedResolverOptions extends ObservedCandidateOptions {
+  onResolution?: (trace: ObservedResolutionTrace) => void;
+}
+
+/**
+ * Resolves one input only after the controller selects this tool. A successful judgment
+ * leases the selected source relationship until every selected member has been returned.
+ */
+export function observedReadResolver(
+  tool: CandidateTool,
+  catalog: readonly CandidateTool[],
+  judge: ObservedArgumentJudge,
+  options: ObservedResolverOptions = {},
+): ((context: AgentContext) => Promise<unknown | undefined>) | undefined {
+  const prepared = prepare(tool, catalog, options);
+  if (prepared === undefined) return undefined;
+  const cache = new Map<string, CachedRelationship>();
+
+  return async context => {
+    const query = prepared.query(context);
+    if (query === undefined) return undefined;
+    const evidenceVersion = stable(query.domains.map(domain => ({
+      path: domain.path,
+      sourceTool: domain.sourceTool,
+      options: domain.options.map(option => ({ value: option.value, source: option.source })),
+    })));
+    const key = stable([tool.name, prepared.argumentName, context.request, evidenceVersion]);
+    let relationship = cache.get(key);
+    const cacheHit = relationship !== undefined;
+    if (relationship === undefined) {
+      const selection = await judge(query, context);
+      const domain = query.domains.find(item => item.id === selection.domainId);
+      const selected = new Set(selection.optionIds);
+      const alreadyUsed = prepared.alreadyUsed(context);
+      relationship = {
+        sourcePath: domain?.path,
+        sourceConfidence: selection.sourceConfidence,
+        selectedOptions: domain?.options.filter(option => {
+          if (!selected.has(option.id)) return false;
+          const checked = prepared.schema.safeParse({ [prepared.argumentName]: option.value });
+          return checked.success && !alreadyUsed.has(stable(checked.data));
+        }) ?? [],
+        next: 0,
+      };
+      cache.set(key, relationship);
+    }
+
+    const option = relationship.selectedOptions[relationship.next];
+    const checked = option === undefined
+      ? undefined
+      : prepared.schema.safeParse({ [prepared.argumentName]: option.value });
+    const returnedOption = checked?.success === true ? option : undefined;
+    if (returnedOption !== undefined) relationship.next++;
+    options.onResolution?.({
+      query,
+      evidenceVersion,
+      cacheHit,
+      ...(relationship.sourcePath === undefined ? {} : { sourcePath: relationship.sourcePath }),
+      ...(relationship.sourceConfidence === undefined ? {} : { sourceConfidence: relationship.sourceConfidence }),
+      selectedOptions: relationship.selectedOptions,
+      ...(returnedOption === undefined ? {} : { returnedOption }),
+    });
+    return checked?.success === true ? structuredClone(checked.data) : undefined;
+  };
+}
+
+interface CachedRelationship {
+  sourcePath?: string;
+  sourceConfidence?: number;
+  selectedOptions: readonly ObservedOption[];
+  next: number;
+}
+
 /**
  * Prepares read calls from a dynamic closed set of observed values. The judge interprets
  * meaning; this module owns provenance, freshness, exact copying, schema validation, and
@@ -59,46 +144,21 @@ export function observedReadCandidates(
   judge: ObservedArgumentJudge,
   options: ObservedCandidateOptions = {},
 ): CandidateProvider | undefined {
-  if (tool.risk !== 'read') return undefined;
-  const object = objectSchema(tool.parameters);
-  if (object === undefined || object.required.length !== 1) return undefined;
-  const argumentName = object.required[0]!;
-  const argumentSchema = object.properties[argumentName];
-  if (argumentSchema === undefined || !scalarTypes(argumentSchema).length) return undefined;
-
-  let schema: z.ZodType;
-  try { schema = z.fromJSONSchema(tool.parameters); } catch { return undefined; }
-  const risks = new Map(catalog.map(entry => [entry.name, entry.risk]));
-  const maxDomains = options.maxDomains ?? 20;
-  const maxOptions = options.maxOptions ?? 100;
+  const prepared = prepare(tool, catalog, options);
+  if (prepared === undefined) return undefined;
 
   return async context => {
-    const history = callHistory(context.conversation, context.state.observations);
-    // A mutation, including one with a lost response, makes earlier observed values stale.
-    const barrier = history.findLastIndex(call => risks.get(call.tool) !== 'read');
-    const fresh = history.slice(barrier + 1);
-    const alreadyUsed = new Set(
-      fresh
-        .filter(call => call.turn === 'current' && call.outcome === 'result' && call.tool === tool.name)
-        .map(call => stable(call.input)),
-    );
-    const domains = observedDomains(fresh, argumentSchema, maxDomains, maxOptions);
-    if (domains.length === 0) return [];
-
-    const selection = await judge({
-      request: context.request,
-      tool: { name: tool.name, description: tool.description ?? tool.name },
-      argument: { name: argumentName, schema: argumentSchema },
-      domains,
-    }, context);
-    const domain = domains.find(item => item.id === selection.domainId);
+    const query = prepared.query(context);
+    if (query === undefined) return [];
+    const selection = await judge(query, context);
+    const domain = query.domains.find(item => item.id === selection.domainId);
     if (domain === undefined) return [];
     const selected = new Set(selection.optionIds);
     const candidates: CallCandidate[] = [];
     for (const option of domain.options) {
       if (!selected.has(option.id)) continue;
-      const checked = schema.safeParse({ [argumentName]: option.value });
-      if (!checked.success || alreadyUsed.has(stable(checked.data))) continue;
+      const checked = prepared.schema.safeParse({ [prepared.argumentName]: option.value });
+      if (!checked.success || prepared.alreadyUsed(context).has(stable(checked.data))) continue;
       candidates.push({
         input: structuredClone(checked.data),
         description: `Call ${tool.name} with an observed value from ${domain.path}. ${option.description}`,
@@ -106,6 +166,50 @@ export function observedReadCandidates(
       });
     }
     return candidates;
+  };
+}
+
+function prepare(tool: CandidateTool, catalog: readonly CandidateTool[], options: ObservedCandidateOptions) {
+  if (tool.risk !== 'read') return undefined;
+  const object = objectSchema(tool.parameters);
+  if (object === undefined || object.required.length !== 1) return undefined;
+  const argumentName = object.required[0]!;
+  const argumentSchema = object.properties[argumentName];
+  if (argumentSchema === undefined || !scalarTypes(argumentSchema).length) return undefined;
+  let schema: z.ZodType;
+  try { schema = z.fromJSONSchema(tool.parameters); } catch { return undefined; }
+  const risks = new Map(catalog.map(entry => [entry.name, entry.risk]));
+  const maxDomains = options.maxDomains ?? 20;
+  const maxOptions = options.maxOptions ?? 100;
+  const fresh = (context: AgentContext) => {
+    const history = callHistory(context.conversation, context.state.observations);
+    const barrier = history.findLastIndex(call => risks.get(call.tool) !== 'read');
+    return history.slice(barrier + 1);
+  };
+  return {
+    argumentName,
+    schema,
+    alreadyUsed: (context: AgentContext) => new Set(
+      fresh(context)
+        .filter(call => call.turn === 'current' && call.outcome === 'result' && call.tool === tool.name)
+        .map(call => stable(call.input)),
+    ),
+    query: (context: AgentContext): ObservedArgumentQuery | undefined => {
+      // Results from the target tool are consequences of the relationship, not new source
+      // evidence. Excluding them keeps the evidence version stable while a collection drains.
+      const domains = observedDomains(
+        fresh(context).filter(call => call.tool !== tool.name),
+        argumentSchema,
+        maxDomains,
+        maxOptions,
+      );
+      return domains.length === 0 ? undefined : {
+        request: context.request,
+        tool: { name: tool.name, description: tool.description ?? tool.name },
+        argument: { name: argumentName, schema: argumentSchema },
+        domains,
+      };
+    },
   };
 }
 
@@ -185,6 +289,7 @@ function observedDomains(
   return [...groups.values()].map((group, index) => ({
     id: `domain:${index}`,
     path: group.path,
+    sourceTool: group.sourceTool,
     description: `Values observed at ${group.path} in the result of ${group.sourceTool}.`,
     options: deduplicate(group.options),
   }));

@@ -1,7 +1,7 @@
 import { jsonSchema, type LanguageModel } from 'ai';
 import {
   MissingInformation,
-  observedReadCandidates,
+  observedReadResolver,
   schemaReadCandidates,
   agentTool,
   callHistory,
@@ -12,6 +12,7 @@ import {
   type AgentToolSet,
   type Observation,
   type ObservedArgumentJudge,
+  type ObservedResolutionTrace,
   type RepeatPolicy,
   type RespondAdapter,
   type Risk,
@@ -50,17 +51,23 @@ export function bridgeTools(
   argumentsModel?: LanguageModel,
   writeArgumentsModel?: LanguageModel,
   observedArgumentJudge?: ObservedArgumentJudge,
+  onObservedResolution?: (trace: ObservedResolutionTrace) => void,
 ): AgentToolSet {
   const tools: AgentToolSet = {};
   for (const spec of specs) {
     const schema = jsonSchema(spec.parameters);
+    const observedResolver = observedArgumentJudge === undefined
+      ? undefined
+      : observedReadResolver(spec, specs, observedArgumentJudge, { onResolution: onObservedResolution });
     tools[spec.name] = agentTool({
       description: describe(spec),
       inputSchema: schema,
       risk: spec.risk ?? 'unknown',
       repeat: spec.repeat ?? 'allow',
-      candidates: readCandidates(spec, specs, observedArgumentJudge),
+      candidates: schemaReadCandidates(spec, specs),
       resolveInput: async context => {
+        const observed = await observedResolver?.(context);
+        if (observed !== undefined) return observed;
         const model = spec.risk === 'read' ? argumentsModel : (writeArgumentsModel ?? argumentsModel);
         return resolveInput(spec, context, model);
       },
@@ -69,22 +76,6 @@ export function bridgeTools(
     });
   }
   return tools;
-}
-
-/** Exact projection is free and certain; semantic observed domains are its fallback. */
-function readCandidates(
-  spec: ToolSpec,
-  specs: readonly ToolSpec[],
-  judge: ObservedArgumentJudge | undefined,
-) {
-  const exact = schemaReadCandidates(spec, specs);
-  const observed = judge === undefined ? undefined : observedReadCandidates(spec, specs, judge);
-  if (exact === undefined) return observed;
-  if (observed === undefined) return exact;
-  return async (context: AgentContext) => {
-    const projected = await exact(context);
-    return projected.length > 0 ? projected : observed(context);
-  };
 }
 
 /** The description the controller selects on: what the tool does and what it returns. */

@@ -103,7 +103,7 @@ export { evidenceCalculationTool } from './calculate.ts';
 export { modelTaskTracker } from './task-tracker.ts';
 
 export { schemaReadCandidates, type CandidateTool } from './candidates.ts';
-export { observedReadCandidates } from './observed-candidates.ts';
+export { observedReadCandidates, observedReadResolver } from './observed-candidates.ts';
 export type {
   ObservedArgumentJudge,
   ObservedArgumentQuery,
@@ -111,6 +111,8 @@ export type {
   ObservedCandidateOptions,
   ObservedDomain,
   ObservedOption,
+  ObservedResolutionTrace,
+  ObservedResolverOptions,
 } from './observed-candidates.ts';
 
 export type { GenerationTrace } from './types.ts';

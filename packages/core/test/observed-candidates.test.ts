@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { observedReadCandidates, type CandidateTool, type ObservedArgumentJudge } from '../src/index.ts';
+import { observedReadCandidates, observedReadResolver, type CandidateTool, type ObservedArgumentJudge } from '../src/index.ts';
 import { reduceState } from '../src/state.ts';
 import type { AgentContext } from '../src/tool.ts';
 import type { Observation } from '../src/types.ts';
@@ -13,8 +13,8 @@ const lookup: CandidateTool = {
   },
 };
 const catalog: CandidateTool[] = [lookup, { name: 'list_work', risk: 'read', parameters: {} }, { name: 'change', risk: 'write', parameters: {} }];
-const observation = (detail: unknown, id = 'source', tool = 'list_work'): Observation => ({
-  id, tool, input: {}, detail, kind: 'tool-result', cycle: 1, summary: 'Observed',
+const observation = (detail: unknown, id = 'source', tool = 'list_work', input: unknown = {}): Observation => ({
+  id, tool, input, detail, kind: 'tool-result', cycle: 1, summary: 'Observed',
 });
 const context = (observations: Observation[], request = 'Open every canvas.') => ({
   request, conversation: [], state: { ...reduceState([]), observations }, abortSignal: new AbortController().signal,
@@ -56,4 +56,61 @@ test('root references expose a required observed argument', async () => {
   const all: ObservedArgumentJudge = query => ({ domainId: query.domains[0]?.id, optionIds: query.domains[0]?.options.map(option => option.id) ?? [] });
   const result = await observedReadCandidates(referenced, catalog, all)!(context([observation({ token: 'A-1' })]));
   expect(result.map(candidate => candidate.input)).toEqual([{ artifact_id: 'A-1' }]);
+});
+
+test('selected-tool resolution caches a source relationship and drains every selected member', async () => {
+  let judgments = 0;
+  const traces: { cacheHit: boolean; path?: string; confidence?: number; selected: unknown[] }[] = [];
+  const judge: ObservedArgumentJudge = query => {
+    judgments++;
+    const domain = query.domains.find(item => item.path === 'canvases[].tokens[]')!;
+    return { domainId: domain.id, optionIds: domain.options.map(option => option.id), sourceConfidence: 0.91 };
+  };
+  const resolver = observedReadResolver(lookup, catalog, judge, {
+    onResolution: result => traces.push({
+      cacheHit: result.cacheHit,
+      path: result.sourcePath,
+      confidence: result.sourceConfidence,
+      selected: result.selectedOptions.map(option => option.value),
+    }),
+  })!;
+  const source = observation({ canvases: [{ tokens: ['A-1', 'A-2'] }], palettes: ['P-1'] });
+
+  expect(await resolver(context([source]))).toEqual({ artifact_id: 'A-1' });
+  expect(await resolver(context([
+    source,
+    observation({ title: 'First' }, 'opened-1', 'open_artifact', { artifact_id: 'A-1' }),
+  ]))).toEqual({ artifact_id: 'A-2' });
+  expect(await resolver(context([
+    source,
+    observation({ title: 'First' }, 'opened-1', 'open_artifact', { artifact_id: 'A-1' }),
+    observation({ title: 'Second' }, 'opened-2', 'open_artifact', { artifact_id: 'A-2' }),
+  ]))).toBeUndefined();
+
+  expect(judgments).toBe(1);
+  expect(traces).toEqual([
+    { cacheHit: false, path: 'canvases[].tokens[]', confidence: 0.91, selected: ['A-1', 'A-2'] },
+    { cacheHit: true, path: 'canvases[].tokens[]', confidence: 0.91, selected: ['A-1', 'A-2'] },
+    { cacheHit: true, path: 'canvases[].tokens[]', confidence: 0.91, selected: ['A-1', 'A-2'] },
+  ]);
+});
+
+test('a changed source evidence version gets a new judgment after the cached collection drains', async () => {
+  let judgments = 0;
+  const judge: ObservedArgumentJudge = query => {
+    judgments++;
+    const domain = query.domains.find(item => item.path === 'tokens[]')!;
+    return { domainId: domain.id, optionIds: domain.options.map(option => option.id) };
+  };
+  const resolver = observedReadResolver(lookup, catalog, judge)!;
+  const first = observation({ tokens: ['A-1'] });
+  expect(await resolver(context([first]))).toEqual({ artifact_id: 'A-1' });
+  expect(await resolver(context([first]))).toBeUndefined();
+  const second = observation({ tokens: ['A-2'] }, 'source-2');
+  expect(await resolver(context([
+    first,
+    observation({ title: 'First' }, 'opened-1', 'open_artifact', { artifact_id: 'A-1' }),
+    second,
+  ]))).toEqual({ artifact_id: 'A-2' });
+  expect(judgments).toBe(2);
 });

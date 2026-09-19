@@ -26,18 +26,18 @@ test('Jev adapter asks semantic closed-set questions and returns only observed o
     tool: { name: 'open_artifact', description: 'Open a design artifact.' },
     argument: { name: 'artifact_id', schema: { type: 'string' } },
     domains: [
-      { id: 'domain:0', path: 'canvases[].tokens[]', description: 'Canvas tokens.', options: [
+      { id: 'domain:0', path: 'canvases[].tokens[]', sourceTool: 'list_work', description: 'Canvas tokens.', options: [
         { id: 'value:0:0', value: 'A-1', description: 'First canvas.', source: 'call:1', path: 'canvases[].tokens[]' },
         { id: 'value:0:1', value: 'A-2', description: 'Second canvas.', source: 'call:1', path: 'canvases[].tokens[]' },
       ] },
-      { id: 'domain:1', path: 'palettes[]', description: 'Palette tokens.', options: [
+      { id: 'domain:1', path: 'palettes[]', sourceTool: 'list_work', description: 'Palette tokens.', options: [
         { id: 'value:1:0', value: 'P-1', description: 'A palette.', source: 'call:1', path: 'palettes[]' },
       ] },
     ],
   };
   const judge = jevObservedArguments({ client });
   const context = { abortSignal: new AbortController().signal } as AgentContext;
-  expect(await judge(query, context)).toEqual({ domainId: 'domain:0', optionIds: ['value:0:0', 'value:0:1'] });
+  expect(await judge(query, context)).toEqual({ domainId: 'domain:0', optionIds: ['value:0:0', 'value:0:1'], sourceConfidence: 0.92 });
   const questions = body?.['questions'] as Record<string, { instructions: string; criteria: Record<string, unknown> }>;
   expect(questions['source']?.instructions).toContain('Select by meaning and role, not by spelling similarity');
   expect(Object.keys(questions['source']?.criteria ?? {})).toEqual(['none_fit', 'domain:0', 'domain:1']);
@@ -59,13 +59,13 @@ test('low-confidence and none-fit source answers yield no observed values', asyn
   const query: ObservedArgumentQuery = {
     request: 'Open an unknown thing.', tool: { name: 'open', description: 'Open it.' },
     argument: { name: 'id', schema: { type: 'string' } }, domains: [{
-      id: 'domain:0', path: 'others[]', description: 'Other values.', options: [
+      id: 'domain:0', path: 'others[]', sourceTool: 'list_others', description: 'Other values.', options: [
         { id: 'value:0:0', value: 'X', description: 'Other.', source: 'call:1', path: 'others[]' },
       ],
     }],
   };
   const context = { abortSignal: new AbortController().signal } as AgentContext;
-  expect(await jevObservedArguments({ client })(query, context)).toEqual({ optionIds: [] });
+  expect(await jevObservedArguments({ client })(query, context)).toEqual({ optionIds: [], sourceConfidence: 0.99 });
 });
 
 test('selecting a singleton observed domain copies its only member without a second semantic gate', async () => {
@@ -81,11 +81,11 @@ test('selecting a singleton observed domain copies its only member without a sec
   const query: ObservedArgumentQuery = {
     request: 'Track this package.', tool: { name: 'track', description: 'Track a package.' },
     argument: { name: 'tracking_id', schema: { type: 'string' } }, domains: [{
-      id: 'domain:0', path: 'carrier_reference', description: 'The carrier reference.', options: [
+      id: 'domain:0', path: 'carrier_reference', sourceTool: 'get_package', description: 'The carrier reference.', options: [
         { id: 'value:0:0', value: 'PKG-1', description: 'The only package.', source: 'call:1', path: 'carrier_reference' },
       ],
     }],
   };
   const context = { abortSignal: new AbortController().signal } as AgentContext;
-  expect(await jevObservedArguments({ client })(query, context)).toEqual({ domainId: 'domain:0', optionIds: ['value:0:0'] });
+  expect(await jevObservedArguments({ client })(query, context)).toEqual({ domainId: 'domain:0', optionIds: ['value:0:0'], sourceConfidence: 0.98 });
 });
