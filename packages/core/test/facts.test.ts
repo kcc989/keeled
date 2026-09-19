@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { candidatesFor, factIndex, factType, recordIndex, recordsWith } from '../src/facts.ts';
+import { candidatesFor, factIndex, factType } from '../src/facts.ts';
 import type { CallRecord } from '../src/projection.ts';
 
 const call = (ref: string, tool: string, result: unknown): CallRecord => ({
@@ -61,25 +61,5 @@ describe('fact index', () => {
     const reservations = candidatesFor('reservation_id', facts).map(fact => fact.value);
     expect(reservations.slice(0, 2)).toEqual(['M05KNL', 'UHDAHF']);
     expect(candidatesFor('payment_id', facts).map(fact => fact.value)).toContain('gift_card_8887175');
-  });
-});
-
-describe('record index', () => {
-  const search = call('call_3', 'search_direct_flight', [
-    { flight_number: 'HAT110', origin: 'ATL', destination: 'PHL', date: '2024-05-24', prices: { economy: 148 } },
-    { flight_number: 'HAT172', origin: 'PHL', destination: 'ATL', date: '2024-05-26', prices: { economy: 131 } },
-  ]);
-  const records = recordIndex([user, reservation, search, search]);
-
-  test('each distinct record once, with its fields together', () => {
-    const flights = recordsWith(['flight_number', 'date'], records);
-    expect(flights.map(record => record.fields['flight_number'])).toEqual(['HAT110', 'HAT172']);
-    expect(flights[0]).toMatchObject({ tool: 'search_direct_flight', sources: ['call_3'] });
-    expect(flights[0]!.label).toContain('origin=ATL, destination=PHL, date=2024-05-24, prices.economy=148');
-  });
-
-  test('only records with every requested field qualify', () => {
-    expect(recordsWith(['origin', 'destination', 'date'], records)).toHaveLength(2);
-    expect(recordsWith(['reservation_id', 'origin'], records).map(record => record.fields['reservation_id'])).toEqual(['M05KNL']);
   });
 });

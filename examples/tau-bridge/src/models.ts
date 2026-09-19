@@ -30,7 +30,7 @@ export function openRouterModels(modelId: string, apiKey: string, providers: rea
     });
   return {
     model: routed(),
-    // Filling in read arguments and keeping the request ledger are extraction.
+    // Filling in read arguments is extraction.
     argumentsModel: routed({ reasoning: { enabled: false } }),
     // State-changing calls combine policy, prior results, and several exact fields.
     writeArgumentsModel: routed({ reasoning: { effort: 'low' } }),

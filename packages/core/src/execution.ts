@@ -7,7 +7,6 @@ import { MissingInformation, PlanValidationError, errorMessage, isAbortError } f
 import type { Plan } from './plan.ts';
 import {
   adoptProposal,
-  dependenciesSatisfied,
   parsePlanProposal,
   type PlanProposal,
 } from './plan.ts';
@@ -22,7 +21,7 @@ import {
 } from './projection.ts';
 import { Turn, type Writer } from './turn.ts';
 import type { AgentContext, AgentToolExecutionOptions, AgentToolSet, RegisteredTool } from './tool.ts';
-import type { AvailableTool, ControllerContext, NextAction, PendingAction } from './controller.ts';
+import type { AvailableTool, ControllerContext, ControlResult, NextAction, PendingAction } from './controller.ts';
 import type {
   AgentMessage,
   AgentResult,
@@ -194,6 +193,8 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
   /** Refusals this turn, keyed by call, with the tool evidence they were made against. */
   readonly #refusals = new Map<string, Refusal>();
   #stopReason: StopReason = 'limit';
+  #initialPlanningAvailable: boolean;
+  #recoveryPlanningAvailable = false;
 
   constructor(
     definition: AgentDefinition<TOOLS>,
@@ -232,6 +233,10 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       usage,
       messageId: createId('msg'),
     });
+    // Offer one focused task-state update at setup and when a waiting task receives
+    // another user message. It does not compete with domain actions on every cycle.
+    this.#initialPlanningAvailable =
+      this.#turn.plan?.kind !== 'explicit' || this.#turn.state.stopReason === 'needs_input';
     this.#generation = new GenerationHost({
       defaultModel: definition.model,
       usage,
@@ -249,41 +254,65 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     try {
       while (this.#turn.hasWorkBudget()) {
         this.#turn.throwIfAborted();
+        if (this.#allStepsDone()) {
+          outcome = 'completed';
+          break;
+        }
         this.#turn.beginCycle();
 
-        const verification = await this.#verifyProgress();
         const resume = resumable.shift();
         if (resume !== undefined) {
-          const action: Extract<NextAction, { type: 'tool' }> = { type: 'tool', tool: resume.tool };
+          const action: Extract<NextAction, { type: 'tool' }> = {
+            type: 'tool',
+            tool: resume.tool,
+            ...(resume.stepId === undefined ? {} : { stepId: resume.stepId }),
+          };
           this.#turn.recordDecision({
             action,
             rationale: 'The runtime resumed the exact action held for confirmation.',
           });
           await this.#callTool(action, { preparedInput: resume.input });
+          this.#offerRecoveryAfterToolFailure(action);
         } else {
-        const context = this.#turn.decisionContext(verification, await this.#availableTools());
-        const decision = await this.#definition.controller.decide(context);
-        const action = this.#normalize(decision.action, context);
+          const planningAvailable = this.#initialPlanningAvailable || this.#recoveryPlanningAvailable;
+          const context = this.#turn.decisionContext(
+            undefined,
+            await this.#availableTools(planningAvailable),
+          );
+          const control = await this.#definition.controller.control(context);
+          this.#initialPlanningAvailable = false;
+          this.#recoveryPlanningAvailable = false;
+          const action = this.#normalize(control.action, context);
 
-        this.#turn.recordDecision(
-          { ...decision, action },
-          action === decision.action ? undefined : { reason: 'Action rejected by the runtime.' },
-        );
+          this.#turn.recordDecision(
+            { ...control, action },
+            action === control.action
+              ? undefined
+              : { reason: 'The runtime attributed the action to the current plan step.' },
+          );
 
-        if (action.type === 'respond') {
-          // Without a plan, progress is not assessed each cycle, so the goal is checked
-          // when the controller proposes to complete.
-          const check =
-            action.outcome === 'completed' ? (verification ?? (await this.#verifyProgress(true))) : undefined;
-          if (check !== undefined && !check.canComplete) {
-            this.#turn.recordBlockedCompletion(check);
+          if (action.type === 'complete_step') {
+            if ((control.confidence ?? 0) < this.#policy.inferredConfidenceFloor) {
+              this.#turn.recordBlockedCompletion(undefined);
+            } else if (action.stepId !== undefined) {
+              this.#completeStep(action.stepId, control.confidence);
+            }
+          } else if (action.type === 'respond') {
+            if (action.outcome === 'completed') {
+              const stepId = context.currentStep?.id;
+              if (stepId === undefined || (control.confidence ?? 0) < this.#policy.inferredConfidenceFloor) {
+                this.#turn.recordBlockedCompletion(undefined);
+              } else {
+                this.#completeStep(stepId, control.confidence);
+              }
+            } else {
+              outcome = action.outcome;
+              break;
+            }
           } else {
-            outcome = action.outcome;
-            break;
+            await this.#callTool(action);
+            this.#offerRecoveryAfterToolFailure(action);
           }
-        } else {
-          await this.#callTool(action);
-        }
         }
 
         // The first report at one evidence state is feedback. Repeating without any new
@@ -302,12 +331,13 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
           }
           reportedAtEvidence = evidence;
           this.#turn.markNoProgressReported();
+          this.#recoveryPlanningAvailable = this.#definition.planningTool !== undefined;
           this.#turn.recordBlocker(
             'no_progress',
             stalled === 'repeating'
               ? 'The same action was repeated without producing any new evidence.'
               : 'Two actions alternated without producing any new evidence.',
-            'Choose a different action, or respond to the user with what is known.',
+            'Revise the plan once, choose a different action, or respond with what is known.',
           );
         }
       }
@@ -327,6 +357,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       stopReason,
       usage: this.#usage,
       state: this.#turn.state as ExecutionState,
+      taskState: this.#turn.plan,
       plan: this.#turn.plan,
       steps: this.#turn.state.stepsUsed,
     };
@@ -334,95 +365,70 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
 
   // --- decision support -------------------------------------------------
 
-  /**
-   * Assesses steps and the goal. Without a plan it runs only when `force`d, which the loop
-   * does when the controller proposes completion.
-   */
-  async #verifyProgress(force = false): Promise<VerificationSummary | undefined> {
-    if (this.#turn.plan === undefined && !force) return undefined;
-    const context = this.#turn.decisionContext(undefined, await this.#availableTools());
-    const assessment = await this.#definition.controller.assess(context);
-    if (assessment.usage !== undefined) this.#turn.accountController(assessment.usage);
-
-    const floor = this.#policy.inferredConfidenceFloor;
+  /** Crosses off one step. Completion of every step completes the task. */
+  #completeStep(stepId: string, confidence: number | undefined): void {
     const plan = this.#turn.plan;
+    if (plan === undefined || !plan.steps.some(step => step.id === stepId)) return;
     const planVersion = plan?.version ?? 0;
-    const retained = this.#turn.state.verification;
     const steps: VerificationSummary['steps'] = {};
-
-    for (const step of plan?.steps ?? []) {
-      const result = assessment.steps[step.id];
-      const outcome =
-        result === undefined || result.confidence < floor
-          ? 'unknown'
-          : result.complete
-            ? 'passed'
-            : 'failed';
-
-      // An assessment that is merely uncertain reports no evidence, so a result already
-      // recorded against this plan revision stands. Only new evidence or a plan
-      // revision invalidates it.
-      const previous = retained[step.id];
-      if (outcome === 'unknown' && previous !== undefined && previous.planVersion === planVersion) {
-        steps[step.id] = previous;
-        continue;
-      }
-
-      steps[step.id] = {
-        stepId: step.id,
-        outcome,
-        basis: 'inferred',
-        confidence: result?.confidence,
-        planVersion,
-      };
+    for (const step of plan.steps) {
+      const previous = this.#turn.state.verification[step.id];
+      steps[step.id] =
+        step.id === stepId
+          ? { stepId, outcome: 'passed', basis: 'inferred', confidence, planVersion }
+          : previous ?? { stepId: step.id, outcome: 'unknown', basis: 'inferred', planVersion };
     }
-
-    const goalOutcome =
-      assessment.goalMet.confidence < floor
-        ? 'unknown'
-        : assessment.goalMet.complete
-          ? 'passed'
-          : 'failed';
-
-    const retainedGoal = this.#turn.state.goal;
-    const goal: VerificationSummary['goal'] =
-      goalOutcome === 'unknown' && retainedGoal !== undefined
-        ? retainedGoal
-        : { outcome: goalOutcome, basis: 'inferred', confidence: assessment.goalMet.confidence };
-
-    const summary: VerificationSummary = {
+    const complete = plan.steps.every(
+      step => step.id === stepId || this.#turn.stepStatuses[step.id] === 'done',
+    );
+    this.#turn.recordVerification({
       steps,
-      goal,
-      planValid: assessment.planValid.valid,
-      planValidConfidence: assessment.planValid.confidence,
-      canComplete:
-        goal.outcome === 'passed' &&
-        Object.values(steps).every(step => step.outcome === 'passed'),
+      goal: { outcome: complete ? 'passed' : 'unknown', basis: 'inferred', confidence },
+      planValid: true,
+      planValidConfidence: 1,
+      canComplete: complete,
       basis: 'inferred',
-    };
+    });
+  }
 
-    this.#turn.recordVerification(summary);
-    return summary;
+  #allStepsDone(): boolean {
+    const plan = this.#turn.plan;
+    return plan !== undefined && plan.steps.every(step => this.#turn.stepStatuses[step.id] === 'done');
+  }
+
+  #offerRecoveryAfterToolFailure(action: Extract<NextAction, { type: 'tool' }>): void {
+    if (action.tool === this.#definition.planningTool) return;
+    const latest = this.#turn.state.observations.at(-1);
+    if (latest?.kind === 'tool-error' && latest.tool === action.tool) {
+      this.#recoveryPlanningAvailable = this.#definition.planningTool !== undefined;
+    }
   }
 
   #normalize(action: NextAction, context: ControllerContext): NextAction {
     if (action.type === 'respond') return action;
 
+    if (action.type === 'complete_step') {
+      return context.currentStep === undefined
+        ? { type: 'respond', outcome: 'blocked' }
+        : { type: 'complete_step', stepId: context.currentStep.id };
+    }
+
     const available = context.availableTools.some(tool => tool.name === action.tool);
     if (!available) {
       return { type: 'respond', outcome: 'blocked' };
     }
+    // Planning changes the plan itself, not a domain step. Its result is linked through
+    // PlanRecord.sourceCallId rather than attributed as evidence for one current step.
+    if (action.tool === this.#definition.planningTool) return action;
 
-    const plan = context.plan;
-    if (action.stepId !== undefined) {
-      if (plan === undefined || !plan.steps.some(step => step.id === action.stepId)) {
-        return { type: 'tool', tool: action.tool };
-      }
-      if (!dependenciesSatisfied(plan, action.stepId, context.stepStatuses)) {
-        return { type: 'tool', tool: action.tool };
-      }
-    }
-    return action;
+    const step = context.currentStep;
+    if (step === undefined) return { type: 'respond', outcome: 'blocked' };
+    return {
+      ...action,
+      stepId: step.id,
+      objective: step.objective,
+      evidence: [...step.evidence],
+    };
   }
 
   // --- tool invocation --------------------------------------------------
@@ -752,11 +758,17 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     this.#turn.recordPlan({
       planId: adoption.plan.id,
       version: adoption.plan.version,
+      kind: adoption.plan.kind,
       objective: adoption.plan.objective,
+      constraints: [...adoption.plan.constraints],
+      knownFacts: adoption.plan.knownFacts.map(fact => ({ ...fact })),
       steps: adoption.plan.steps.map(step => ({
         id: step.id,
         objective: step.objective,
         dependencies: [...step.dependencies],
+        constraints: [...step.constraints],
+        completionCriteria: step.completionCriteria,
+        evidence: [...step.evidence],
       })),
       sourceCallId,
       previousVersion: previousPlan?.version,
@@ -786,8 +798,16 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
           ? ''
           : `Input of this tool's action awaiting the user's confirmation:\n${JSON.stringify(context.action.awaitingInput)}\n` +
             'If the user confirmed it unchanged, return exactly this input.',
-        context.stepId === undefined ? '' : `Current plan step: ${context.stepId}`,
-        `Plan:\n${digestPlan(context.plan, context.state.stepStatuses)}`,
+        context.currentGoal === undefined
+          ? ''
+          : [
+              `Current goal: ${context.currentGoal.id} — ${context.currentGoal.objective}`,
+              `Task constraints: ${context.taskState?.constraints.length === 0 ? 'None.' : context.taskState?.constraints.join('; ')}`,
+              `Goal constraints: ${context.currentGoal.constraints.length === 0 ? 'None.' : context.currentGoal.constraints.join('; ')}`,
+              `Completion criteria: ${context.currentGoal.completionCriteria}`,
+              `Evidence references: ${context.currentGoal.evidence.length === 0 ? 'None.' : context.currentGoal.evidence.join(', ')}`,
+            ].join('\n'),
+        `Task state:\n${digestPlan(context.taskState, context.state.stepStatuses)}`,
         `Evidence:\n${digestObservations(context.state.observations)}`,
       ]
         .filter(line => line.length > 0)
@@ -811,8 +831,12 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       conversation,
       messages: projectMessages(conversation),
       state: this.#turn.state,
+      taskState: this.#turn.plan,
       plan: this.#turn.plan,
+      goalId: action?.stepId,
       stepId: action?.stepId,
+      currentGoal: this.#turn.plan?.goals.find(goal => goal.id === action?.stepId),
+      planStep: this.#turn.plan?.goals.find(goal => goal.id === action?.stepId),
       action:
         action === undefined
           ? undefined
@@ -828,7 +852,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     };
   }
 
-  async #availableTools(): Promise<AvailableTool[]> {
+  async #availableTools(includePlanning = false): Promise<AvailableTool[]> {
     const context = this.#agentContext(undefined);
     const tools: AvailableTool[] = [];
     // A tool whose call awaits the user's confirmation cannot proceed this turn; asking the
@@ -837,6 +861,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       this.#turn.state.blockers.filter(blocker => blocker.kind === 'needs_confirmation').map(blocker => blocker.tool),
     );
     for (const tool of this.#definition.registry.values()) {
+      if (tool.name === this.#definition.planningTool && !includePlanning) continue;
       if (awaiting.has(tool.name)) continue;
       if (tool.available !== undefined && !(await tool.available(context))) continue;
       tools.push({
@@ -890,6 +915,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
           instructions: this.#definition.instructions,
           stopReason: outcome,
           state: this.#turn.state,
+          taskState: this.#turn.plan,
           plan: this.#turn.plan,
           conversation: [...this.#originalMessages],
           abortSignal: this.#abort.signal,
@@ -964,6 +990,8 @@ export interface RespondContext {
   instructions: string;
   stopReason: StopReason;
   state: Readonly<ExecutionState>;
+  taskState: Plan | undefined;
+  /** @deprecated Use taskState. */
   plan: Plan | undefined;
   conversation: AgentMessage[];
   abortSignal: AbortSignal;
@@ -997,7 +1025,7 @@ const defaultRespond: RespondAdapter = async context => {
     prompt: [
       `Original request:\n${context.request}`,
       `Outcome: ${context.stopReason}`,
-      `Plan:\n${digestPlan(context.plan, context.state.stepStatuses)}`,
+      `Task state:\n${digestPlan(context.taskState, context.state.stepStatuses)}`,
       `Evidence:\n${digestObservations(context.state.observations)}`,
       context.state.blockers.length === 0
         ? ''

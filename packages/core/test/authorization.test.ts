@@ -541,7 +541,7 @@ describe('the selected action reaches input resolution', () => {
       tools: { search },
     });
     const result = await agent.run({ messages: [userMessage('Book a round trip.')] });
-    expect(seen).toEqual([{ tool: 'search', objective: 'Find the return flight', evidence: ['call_1'] }]);
+    expect(seen).toEqual([{ tool: 'search', objective: 'Book a round trip.', evidence: [] }]);
     expect(result.state.blockers).toMatchObject([
       { kind: 'missing_evidence', tool: 'search', resolution: 'Obtain it first, from a lookup or from the user: the return date, from the user' },
     ]);

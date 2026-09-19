@@ -4,13 +4,14 @@ import type {
   BlockerRecord,
   DecisionRecord,
   ExecutionState,
+  KnownFactRecord,
   Observation,
   PlanRecord,
   TransitionRecord,
   VerificationRecord,
 } from './types.ts';
 
-export const reducerVersion = 1;
+export const reducerVersion = 2;
 
 export function emptyState(): ExecutionState {
   return {
@@ -29,39 +30,55 @@ export function emptyState(): ExecutionState {
 /**
  * Pure, versioned reduction of persisted message data into execution state.
  *
- * Only the parts written after the last terminal transition are reduced, so that
- * state describes the current turn rather than the whole conversation. It never
- * re-runs the controller, tools, or acceptance callbacks.
+ * Terminal transitions reset turn-local execution state. A task waiting for user input
+ * also retains its plan and progress. It never re-runs the controller, tools, or callbacks.
  */
 export function reduceState(messages: readonly AgentMessage[]): ExecutionState {
-  const parts: AgentMessage['parts'] = [];
-  let stopReason: ExecutionState['stopReason'];
-
+  let state = emptyState();
+  const context: ReduceContext = {};
   for (const message of messages) {
     if (message.role !== 'assistant') continue;
-    parts.push(...message.parts);
-  }
-
-  let start = 0;
-  for (let index = parts.length - 1; index >= 0; index -= 1) {
-    const part = parts[index];
-    if (part?.type === 'data-transition') {
-      const record = (part as { data: TransitionRecord }).data;
-      if (record.stopReason !== undefined) {
-        start = index + 1;
-        stopReason = record.stopReason;
-        break;
+    for (const part of message.parts) {
+      applyPart(state, part, context);
+      if (part.type === 'data-transition') {
+        const record = (part as { data: TransitionRecord }).data;
+        if (record.stopReason !== undefined) {
+          state = nextTurnState(state, record.stopReason === 'needs_input');
+          delete context.tool;
+          delete context.stepId;
+        }
       }
     }
   }
-
-  const state = emptyState();
-  const context: ReduceContext = {};
-  for (const part of parts.slice(start)) {
-    applyPart(state, part, context);
-  }
-  if (start > 0 && start === parts.length) state.stopReason = stopReason;
   return state;
+}
+
+/** Carry a waiting task into its reply turn; otherwise begin with no active task. */
+function nextTurnState(completed: ExecutionState, taskIsWaiting: boolean): ExecutionState {
+  const next = emptyState();
+  next.stopReason = completed.stopReason;
+  if (taskIsWaiting) {
+    next.planRevisions = completed.planRevisions;
+    next.stepStatuses = { ...completed.stepStatuses };
+    next.verification = { ...completed.verification };
+  }
+  if (taskIsWaiting && completed.plan !== undefined) {
+    const goals = completed.plan.goals.map(goal => ({
+      ...goal,
+      dependencies: [...goal.dependencies],
+      constraints: [...goal.constraints],
+      evidence: [...goal.evidence],
+    }));
+    next.plan = {
+      ...completed.plan,
+      constraints: [...completed.plan.constraints],
+      knownFacts: completed.plan.knownFacts.map(fact => ({ ...fact })),
+      goals,
+      steps: goals,
+    };
+    next.taskState = next.plan;
+  }
+  return next;
 }
 
 /** The decision currently in effect, which attributes the tool parts that follow it. */
@@ -81,6 +98,7 @@ function applyPart(
     const record = (part as { data: DecisionRecord }).data;
     state.cycle = Math.max(state.cycle, record.cycle);
     state.stepsUsed += 1;
+    delete state.stopReason;
     context.tool = record.action.type === 'tool' ? record.action.tool : undefined;
     context.stepId = record.action.type === 'tool' ? record.action.stepId : undefined;
     return;
@@ -88,13 +106,24 @@ function applyPart(
 
   if (type === 'data-plan') {
     const record = (part as { data: PlanRecord }).data;
+    const goals = record.steps.map(step => ({
+      ...step,
+      dependencies: [...step.dependencies],
+      constraints: [...step.constraints],
+      evidence: [...step.evidence],
+    }));
     const plan: Plan = {
       id: record.planId,
       version: record.version,
+      kind: record.kind,
       objective: record.objective,
-      steps: record.steps.map(step => ({ ...step, dependencies: [...step.dependencies] })),
+      constraints: [...(record.constraints ?? [])],
+      knownFacts: (record.knownFacts ?? []).map(fact => ({ ...fact })),
+      goals,
+      steps: goals,
     };
     state.plan = plan;
+    state.taskState = plan;
     state.planRevisions = record.version;
     state.stepStatuses = { ...record.carriedStatuses };
     for (const stepId of record.invalidatedStepIds) {
@@ -103,7 +132,6 @@ function applyPart(
     for (const stepId of Object.keys(state.verification)) {
       if (!plan.steps.some(step => step.id === stepId)) delete state.verification[stepId];
     }
-    state.goal = undefined;
     state.observations.push({
       id: record.id,
       cycle: record.cycle,
@@ -111,6 +139,15 @@ function applyPart(
       summary: `Plan revision ${record.version}: ${record.objective}`,
       detail: { steps: record.steps.map(step => step.id) },
     });
+    return;
+  }
+
+  if (type === 'data-fact') {
+    const record = (part as { data: KnownFactRecord }).data;
+    const taskState = state.taskState ?? state.plan;
+    if (taskState !== undefined && !taskState.knownFacts.some(fact => fact.id === record.fact.id)) {
+      taskState.knownFacts.push({ ...record.fact });
+    }
     return;
   }
 
@@ -188,6 +225,8 @@ function applyToolPart(state: ExecutionState, part: ToolPartLike, context: Reduc
       input: part.input,
       detail: part.output,
     });
+    attachEvidence(state.plan, stepId, part.toolCallId);
+    attachToolFact(state.plan, toolName, part.toolCallId);
     return;
   }
 
@@ -204,7 +243,24 @@ function applyToolPart(state: ExecutionState, part: ToolPartLike, context: Reduc
       detail: part.input,
     };
     state.observations.push(observation);
+    attachEvidence(state.plan, stepId, part.toolCallId);
   }
+}
+
+function attachToolFact(plan: Plan | undefined, tool: string, ref: string): void {
+  if (plan === undefined || plan.knownFacts.some(fact => fact.id === `fact-${ref}`)) return;
+  plan.knownFacts.push({
+    id: `fact-${ref}`,
+    statement: `${tool} returned evidence in ${ref}.`,
+    source: 'tool',
+    reference: ref,
+  });
+}
+
+function attachEvidence(plan: Plan | undefined, stepId: string | undefined, ref: string): void {
+  if (plan === undefined || stepId === undefined) return;
+  const step = plan.steps.find(candidate => candidate.id === stepId);
+  if (step !== undefined && !step.evidence.includes(ref)) step.evidence.push(ref);
 }
 
 export function statusesFor(plan: Plan | undefined, statuses: Record<string, StepStatus>): Record<string, StepStatus> {

@@ -22,14 +22,14 @@ Keeled's loop runs unmodified.
 
 **Pieces.**
 - `examples/tau-bridge`: the HTTP bridge (`server.ts`, `session.ts`, `tools.ts`), the
-  runner (`bun run tau3 <domain> [tau2 options]`), OpenRouter model setup (`models.ts`), and
-  the argument replay (`replay-arguments.ts`). It imports nothing from τ³.
+  runner (`bun run tau3 <domain> [tau2 options]`), and OpenRouter model setup (`models.ts`).
+  It imports nothing from τ³.
 - In the τ³ checkout (not in this repo): `src/tau2/agent/keeled_agent.py`, a
   standard-library shim registered as `keeled` in `src/tau2/registry.py`. It sends tool
   schemas, return schemas, risk, and repeat metadata (`READ` tools → `reuse`), and stores
   Jev's decisions and per-call timings in each message's `raw_data.keeled`.
 - Models go through OpenRouter pinned to Together, then Modal, with no other fallback.
-  Read arguments and the request ledger use reasoning off; write arguments use low effort.
+  Read arguments use reasoning off; write arguments use low effort.
 
 **Environment notes.** τ³ `main` needs `websockets` even without the voice extra; install it
 alone and run `.venv/bin/tau2` (a plain `uv run` re-syncs it away). `bun.lock` is version 2;
@@ -42,7 +42,7 @@ Each item was driven by a failure seen in a trajectory, not by speculation.
 
 | Problem seen | Change |
 | --- | --- |
-| Completion refused in loops when goal confidence sat near the floor | Without a plan, skip per-cycle assessment; check the goal only when completion is proposed |
+| Action selection and progress assessment could disagree | One Jev `control` operation selects one action for the runtime-owned current plan step; `step:complete` crosses it off |
 | Argument calls took 13.7 s spending reasoning tokens on extraction | Reasoning off for read arguments (0.3 s) |
 | Replies retracted true statements in later turns | Reply and argument prompts see tool results from every turn |
 | `get_users` never chosen; replies denied having tools | Tool descriptions include return shapes; reply prompt lists the tools |
@@ -52,7 +52,7 @@ Each item was driven by a failure seen in a trajectory, not by speculation.
 | Blocked writes retried | Structured blockers with a kind and a resolution; confirmation withdraws the tool for the turn; refusals remembered against the evidence they cited |
 | Tool-call markup sent to users | Reply contract check with one repair and a status fallback; optional `reviewReply` |
 | Duplicate call history entries | History keyed by call id |
-| No plans ever made | Planning tool registered; planning prompt sees the whole conversation. Jev still never chose it |
+| Plans were replaced too often, then never selected from a crowded action menu | Every task gets an implicit plan; the setup control request includes a focused `requires_plan` judgment, while normal cycles only advance the current step and recovery offers one revision |
 
 The user's own changes on this branch added input-aware loop detection, evidence-aware
 recovery, durable confirmations, read/write/planning guidance for Jev, and low-effort
@@ -82,10 +82,10 @@ means to name which reservation, followed by duplicate or missing-argument cycle
 
 ## Jev argument selection experiments
 
-The idea: let Jev choose tool arguments from established facts instead of a model generating
-them, with an explicit way out when no fact fits. All experiments replay the two 50-task
-runs (`replay-arguments.ts`): at each of 433 recorded calls, the fact index is rebuilt from
-what was seen before it, and the real Jev answers. It needs no simulator and runs in minutes.
+The idea was to let Jev choose tool arguments from established facts instead of a model
+generating them, with an explicit way out when no fact fits. The experiments replayed the
+two 50-task runs: at each of 433 recorded calls, the fact index was rebuilt from what was
+seen before it and sent to the real Jev service.
 
 - **Coverage.** 76% of all argument values, and 86% of write values, appear verbatim in an
   earlier tool result under a matching key; 12% come from the user's words; 8% are computed.
@@ -102,7 +102,7 @@ what was seen before it, and the real Jev answers. It needs no simulator and run
 - **Load.** One request per call, one per parameter, and one per parameter with a slim state
   gave the same accuracy and latency. Packing independent questions is free; split requests
   only when one answer depends on another.
-- **Request ledger** (`packages/core/src/ledger.ts`): one fast model call per user message
+- **Request ledger** (removed): one fast model call per user message
   records goals and slots, the values the user asked for or chose, with roles and
   derivations, such as resolving "the ATL to PHL flight" to reservation `M05KNL`. Updates take
   1.7 s median (p90 4.1 s) over a bounded window. **It did not help:** writes reached 92%
@@ -122,15 +122,15 @@ did work: it is reliable on unambiguous arguments (`user_id` 78 of 78), it decli
 fact fits, and records remove role errors. The remaining gap is knowing which option the
 user wants, which the ledger at 50% coverage did not close.
 
-## What we kept from the argument work
+## What remains after the argument work
 
-1. **Jev fills only what it has proven:** a required scalar argument whose kind has exactly
-   one known fact, confirmed through Jev's "none" option and "is it listed?" gate. If that
-   covers every required argument, no model is called; otherwise the model fills the rest
-   with Jev's values fixed (`provenArguments` in `examples/tau-bridge/src/tools.ts`).
-2. **Replies are drafted without reasoning;** a repair, triggered by the contract check or
+The active argument-selection and ledger implementations were removed. They added latency
+and public API surface without beating the argument model. These results remain here so the
+same design is not repeated without new evidence.
+
+1. **Replies are drafted without reasoning;** a repair, triggered by the contract check or
    `reviewReply`, uses the reasoning model (`respondWith`). Replies were 34–56% of agent time.
-3. **Jev sees each tool's readiness:** for every required parameter, the known values with
+2. **Jev sees each tool's readiness:** for every required parameter, the known values with
    labels and whether this tool already used them this turn, or that no value is known yet
    (`readinessNote` in `packages/jev/src/history.ts`, using `AvailableTool.required`). This
    targets decisions that led nowhere, 76% of decisions in `harness_v3`.
@@ -146,22 +146,13 @@ user wants, which the ledger at 50% coverage did not close.
 
 ## Next steps
 
-1. Measure the three kept changes with several trials on a fixed task subset, reporting
+1. Measure the two retained changes with several trials on a fixed task subset, reporting
    score, time, and the share of decisions that produce nothing.
-2. Test whether record and ledger context improves Jev's *action* choices, using the replay.
-3. Carry plans or the ledger across turns so multi-turn work is tracked.
+2. Test whether the readiness context improves Jev's action choices.
+3. Measure durable plans across multi-turn tasks and inspect when runtime recovery makes replanning useful.
 
 ## Reproducing
 
 ```sh
-bun run tau3 airline --task-ids 0 1 2 --save-to my_run        # live run
-bun run examples/tau-bridge/src/replay-arguments.ts \
-  --mode ledger --ledgers ledgers.json \
-  --runs ~/projects/tau2-bench/data/simulations/<run>/results.json \
-  --tasks ~/projects/tau2-bench/data/tau2/domains/airline/tasks.json \
-  --tools airline-specs.json --policy ~/projects/tau2-bench/data/tau2/domains/airline/policy.md \
-  --out replay_ledger.json
+bun run tau3 airline --task-ids 0 1 2 --save-to my_run
 ```
-
-`airline-specs.json` is the list of `tool_spec(tool)` results from `keeled_agent.py` for the
-airline environment's tools.

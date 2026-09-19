@@ -1,5 +1,5 @@
 import type { FlexibleSchema, LanguageModel, ModelMessage, Tool, ToolSet, UIMessage } from 'ai';
-import type { Plan, StepStatus } from './plan.ts';
+import type { KnownFact, Plan, StepStatus, TaskState } from './plan.ts';
 
 export type StopReason = 'completed' | 'needs_input' | 'blocked' | 'limit' | 'error' | 'cancelled';
 
@@ -73,6 +73,9 @@ export interface AgentResult {
   stopReason: StopReason;
   usage: UsageTotals;
   state: ExecutionState;
+  /** Durable goals, constraints, and sourced facts for the active task. */
+  taskState?: TaskState;
+  /** @deprecated Use taskState. */
   plan?: Plan;
   steps: number;
 }
@@ -144,6 +147,8 @@ export interface ExecutionState {
   reducerVersion: number;
   cycle: number;
   stepsUsed: number;
+  taskState?: TaskState;
+  /** @deprecated Use taskState. */
   plan?: Plan;
   planRevisions: number;
   stepStatuses: Record<string, StepStatus>;
@@ -170,7 +175,10 @@ export interface AgentMetadata {
 export interface DecisionRecord {
   id: string;
   cycle: number;
-  action: { type: 'tool'; tool: string; stepId?: string } | { type: 'respond'; outcome: 'completed' | 'needs_input' | 'blocked' };
+  action:
+    | { type: 'tool'; tool: string; stepId?: string }
+    | { type: 'complete_step'; stepId?: string }
+    | { type: 'respond'; outcome: 'completed' | 'needs_input' | 'blocked' };
   rationale?: string;
   confidence?: number;
   probabilities?: Record<string, number>;
@@ -182,12 +190,28 @@ export interface PlanRecord {
   cycle: number;
   planId: string;
   version: number;
+  kind: Plan['kind'];
   objective: string;
-  steps: { id: string; objective: string; dependencies: string[] }[];
-  sourceCallId: string;
+  constraints?: string[];
+  knownFacts?: KnownFact[];
+  steps: {
+    id: string;
+    objective: string;
+    dependencies: string[];
+    constraints: string[];
+    completionCriteria: string;
+    evidence: string[];
+  }[];
+  sourceCallId?: string;
   previousVersion?: number;
   invalidatedStepIds: string[];
   carriedStatuses: Record<string, StepStatus>;
+}
+
+export interface KnownFactRecord {
+  id: string;
+  cycle: number;
+  fact: KnownFact;
 }
 
 export interface VerificationRecord {
@@ -219,6 +243,7 @@ export interface TransitionRecord {
 export type AgentDataParts = {
   decision: DecisionRecord;
   plan: PlanRecord;
+  fact: KnownFactRecord;
   verification: VerificationRecord;
   blocker: BlockerRecord;
   transition: TransitionRecord;

@@ -16,7 +16,7 @@ import type {
   Risk,
   UIToolProjection,
 } from './types.ts';
-import type { Plan } from './plan.ts';
+import type { Plan, PlanStep } from './plan.ts';
 
 export const agentToolBrand = Symbol.for('keeled.agent-tool');
 
@@ -36,8 +36,16 @@ export interface AgentContext {
   readonly conversation: AgentMessage[];
   readonly messages: ModelMessage[];
   readonly state: Readonly<ExecutionState>;
+  readonly taskState: Readonly<Plan> | undefined;
+  /** @deprecated Use taskState. */
   readonly plan: Readonly<Plan> | undefined;
+  readonly goalId: string | undefined;
+  /** @deprecated Use goalId. */
   readonly stepId: string | undefined;
+  /** The current goal, including completion criteria and evidence. */
+  readonly currentGoal: Readonly<PlanStep> | undefined;
+  /** @deprecated Use currentGoal. */
+  readonly planStep: Readonly<PlanStep> | undefined;
   /** The action being resolved or executed, as the controller selected it. */
   readonly action: ActionIntent | undefined;
   readonly abortSignal: AbortSignal;
@@ -158,13 +166,14 @@ export interface RegisteredTool {
   invoke: (input: unknown, options: AgentToolExecutionOptions) => unknown | PromiseLike<unknown>;
 }
 
-const reservedPrefix = 'respond:';
+const reservedPrefixes = ['respond:', 'step:'] as const;
 
 export function registerTools(tools: AgentToolSet): Map<string, RegisteredTool> {
   const registry = new Map<string, RegisteredTool>();
 
   for (const [name, tool] of Object.entries(tools)) {
-    if (name.startsWith(reservedPrefix)) {
+    const reservedPrefix = reservedPrefixes.find(prefix => name.startsWith(prefix));
+    if (reservedPrefix !== undefined) {
       throw new ToolRegistrationError(`Tool name "${name}" uses the reserved "${reservedPrefix}" prefix.`);
     }
     registry.set(name, register(name, tool));

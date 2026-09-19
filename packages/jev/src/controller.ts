@@ -3,14 +3,14 @@ import type { JsonValue, NoulResponse, Questions, Usage } from '@typesafe-ai/sdk
 import {
   parseRespondLabel,
   respondLabels,
+  stepCompleteLabel,
   type Controller,
   type ControllerContext,
-  type ControllerDecision,
+  type ControlResult,
   type Authorization,
   type NextAction,
   type PendingAction,
   type ReplyReview,
-  type ProgressAssessment,
   type UsageBucket,
 } from '@keeled/core';
 import { blockerNote, callHistory, readinessNote, repetitionNote, respondNotes } from './history.ts';
@@ -31,8 +31,8 @@ export interface JevControllerOptions {
 }
 
 /**
- * Jev selects the next action and assesses progress. It never generates text, and its
- * selection confidence never authorises execution on its own.
+ * Jev selects one bounded action for the current ordered goal. Code owns task state,
+ * progress, and which actions are currently valid.
  */
 export function jev(options: JevControllerOptions = {}): Controller {
   const client = options.client ?? new TypeSafeClient();
@@ -52,13 +52,17 @@ export function jev(options: JevControllerOptions = {}): Controller {
   return {
     name: 'jev',
 
-    async decide(context: ControllerContext): Promise<ControllerDecision> {
+    async control(context: ControllerContext): Promise<ControlResult> {
       const history = callHistory(context);
       const criteria: Record<string, string> = {};
+      let taskStateTool: string | undefined;
       for (const tool of context.availableTools) {
-        const guidance = tool.isPlanningTool
-          ? ' Use this before work that has multiple obligations, multiple entities, or several dependent actions.'
-          : tool.risk === 'read'
+        if (tool.isPlanningTool) {
+          taskStateTool = tool.name;
+          continue;
+        }
+        const guidance =
+          tool.risk === 'read'
             ? ' Select this when it can retrieve information needed for the request, including by inspecting known identifiers from earlier results.'
             : ' Select this when the requested state change and its exact arguments are supported by the conversation and tool results; the runtime will enforce policy and confirmation.';
         criteria[tool.name] =
@@ -68,8 +72,7 @@ export function jev(options: JevControllerOptions = {}): Controller {
           readinessNote(tool, context, history);
       }
       const notes = respondNotes(context.blockers);
-      criteria[respondLabels.completed] =
-        'Stop and answer the user. Select only when the evidence shows the request is satisfied.' + notes.completed;
+      const goal = context.currentGoal;
       criteria[respondLabels.needs_input] =
         'Stop and ask the user. Select only when required information is owned by the user and no available ' +
         'tool can retrieve it, or when an action needs the user\'s confirmation. Known identifiers and records ' +
@@ -78,94 +81,85 @@ export function jev(options: JevControllerOptions = {}): Controller {
       criteria[respondLabels.blocked] =
         'Stop and explain. Select only when the work cannot continue with any available tool or permitted alternative.';
 
-      const readySteps = context.readySteps;
-      const stepCriteria: Record<string, string> = {};
-      for (const step of readySteps) stepCriteria[step.id] = step.objective;
-
       const questions: Questions = {
         action: choice('Which action should the agent take next?', criteria),
       };
-      if (readySteps.length > 1) {
-        questions['step'] = choice('Which plan step should the next action serve?', stepCriteria);
+      if (goal !== undefined) {
+        questions['goal_achieved'] = noul(
+          `Is the current goal achieved according to its completion criterion: ${goal.completionCriteria}?`,
+          {
+            true:
+              'The conversation and cited tool evidence establish the required outcome, or the outcome can now be given directly in the final response.',
+            false: 'The required outcome is not yet established and another action or user answer is needed.',
+          },
+        );
       }
-
+      if (taskStateTool !== undefined) {
+        const updating = context.taskState?.kind === 'explicit';
+        questions['update_task_state'] = noul(
+          updating
+            ? 'Does the latest user message add or change a goal or constraint in the active task state?'
+            : 'Does the current request contain multiple outcome goals or constraints that should be recorded before taking a domain action?',
+          {
+            true:
+              updating
+                ? 'It requests an additional outcome, changes a required outcome, or states a constraint that affects how the active task may be completed.'
+                : 'The request has multiple distinct outcomes or constraints whose progress must be retained and checked separately.',
+            false:
+              updating
+                ? 'It only supplies a fact, identifier, answer, or confirmation needed by an existing goal, without adding or changing an outcome or constraint.'
+                : 'The request has one outcome and can proceed directly; missing information alone does not create another goal.',
+          },
+        );
+      }
       const result = await request(context, questions);
       const answers = result.answers as unknown as {
         action: ChoiceAnswer;
-        step?: ChoiceAnswer;
+        goal_achieved?: NoulResponse;
+        update_task_state?: NoulResponse;
       };
+
+      const stateUpdate = grade(answers.update_task_state, threshold);
+      if (taskStateTool !== undefined && stateUpdate.complete) {
+        return {
+          action: { type: 'tool', tool: taskStateTool },
+          rationale: 'Jev judged that the durable task state needs ordered goals or constraints updated.',
+          confidence: stateUpdate.confidence,
+          usage: toBucket(result.usage),
+        };
+      }
+
+      const achieved = grade(answers.goal_achieved, threshold);
+      if (goal !== undefined && achieved.complete) {
+        return {
+          action: { type: 'complete_step', stepId: goal.id },
+          rationale: `Jev judged that goal "${goal.id}" is achieved.`,
+          confidence: achieved.confidence,
+          usage: toBucket(result.usage),
+        };
+      }
 
       const label = answers.action.choice;
       const outcome = parseRespondLabel(label);
-      const stepId =
-        readySteps.length === 1 ? readySteps[0]?.id : answers.step?.choice;
-
-      // Jev selects; it does not write. The objective comes from the plan step the action
-      // serves, and the evidence names this turn's earlier calls of the same tool, so input
-      // resolution can see what has already been asked.
-      const objective = readySteps.find(step => step.id === stepId)?.objective;
       const evidence = history.filter(call => call.turn === 'current' && call.tool === label).map(call => call.ref);
       const action: NextAction =
-        outcome === undefined
+        label === stepCompleteLabel
+          ? { type: 'complete_step', ...(goal === undefined ? {} : { stepId: goal.id }) }
+          : outcome === undefined
           ? {
               type: 'tool',
               tool: label,
-              ...(stepId === undefined ? {} : { stepId }),
-              ...(objective === undefined ? {} : { objective }),
+              ...(goal === undefined ? {} : { stepId: goal.id, objective: goal.objective }),
               ...(evidence.length === 0 ? {} : { evidence }),
             }
           : { type: 'respond', outcome };
 
       return {
         action,
-        rationale: `Jev selected "${label}".`,
+        rationale:
+          goal === undefined ? `Jev selected "${label}".` : `Jev selected "${label}" for goal "${goal.id}".`,
         confidence: answers.action.confidence,
         probabilities: answers.action.probabilities,
-        usage: toBucket(result.usage),
-      };
-    },
-
-    async assess(context: ControllerContext): Promise<ProgressAssessment> {
-      const steps = context.plan?.steps ?? [];
-      const keys = steps.map((step, index) => [`step_${index}`, step.id] as const);
-
-      const stepQuestions: Record<string, ReturnType<typeof noul>> = {};
-      for (const [key, stepId] of keys) {
-        const step = steps.find(candidate => candidate.id === stepId);
-        stepQuestions[key] = noul(`Is this plan step complete: ${step?.objective ?? stepId}?`, {
-          true: 'The evidence shows this step’s objective is achieved.',
-          false: 'The evidence does not yet show this step’s objective is achieved.',
-        });
-      }
-
-      const questions = {
-        ...stepQuestions,
-        goal: noul('Has the original request been fully satisfied by the evidence so far?', {
-          true: 'Every part of the request is addressed by the evidence.',
-          false: 'Some part of the request is not yet addressed by the evidence.',
-        }),
-        planValid: noul('Is the current plan still a valid route to the original request?', {
-          true: 'The plan still describes work that leads to the request.',
-          false: 'Observations have invalidated the plan.',
-        }),
-      } satisfies Questions;
-
-      const result = await request(context, questions);
-      const answers = result.answers as unknown as Record<string, NoulResponse>;
-
-      const stepResults: ProgressAssessment['steps'] = {};
-      for (const [key, stepId] of keys) {
-        const answer = answers[key];
-        stepResults[stepId] = grade(answer, threshold);
-      }
-
-      const goal = grade(answers['goal'], threshold);
-      const planValid = grade(answers['planValid'], threshold);
-
-      return {
-        steps: stepResults,
-        goalMet: goal,
-        planValid: { valid: planValid.complete, confidence: planValid.confidence },
         usage: toBucket(result.usage),
       };
     },

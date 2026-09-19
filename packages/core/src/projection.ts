@@ -59,15 +59,26 @@ export function digestPlan(
   plan: Plan | undefined,
   statuses: Readonly<Record<string, StepStatus>>,
 ): string {
-  if (plan === undefined) return 'No plan.';
-  const steps = plan.steps
-    .map(step => {
-      const dependencies = step.dependencies.length === 0 ? 'none' : step.dependencies.join(', ');
-      return `- ${step.id} [${statuses[step.id] ?? 'pending'}] ${step.objective} (depends on: ${dependencies})`;
+  if (plan === undefined) return 'No active task.';
+  const goals = plan.goals
+    .map(goal => {
+      const constraints = goal.constraints.length === 0 ? 'none' : goal.constraints.join('; ');
+      const evidence = goal.evidence.length === 0 ? 'none' : goal.evidence.join(', ');
+      return (
+        `- ${goal.id} [${statuses[goal.id] ?? 'pending'}] ${goal.objective} ` +
+        `(constraints: ${constraints}; achieved when: ${goal.completionCriteria}; ` +
+        `evidence: ${evidence})`
+      );
     })
     .join('\n');
-  return `Objective: ${plan.objective}\nRevision: ${plan.version}\n${steps}`;
+  const constraints = plan.constraints.length === 0 ? 'None.' : plan.constraints.map(value => `- ${value}`).join('\n');
+  const facts = plan.knownFacts.length === 0
+    ? 'None.'
+    : plan.knownFacts.map(fact => `- [${fact.source}] ${fact.statement}${fact.reference === undefined ? '' : ` (${fact.reference})`}`).join('\n');
+  return `Objective: ${plan.objective}\nKind: ${plan.kind}\nRevision: ${plan.version}\nConstraints:\n${constraints}\nKnown facts:\n${facts}\nOrdered goals:\n${goals}`;
 }
+
+export const digestTaskState = digestPlan;
 
 export function digestState(state: Readonly<ExecutionState>): Record<string, unknown> {
   return {
@@ -163,7 +174,12 @@ export function awaitingConfirmation(conversation: readonly AgentMessage[]): Awa
     for (const part of message.parts as (ToolPartLike & { data?: Blocker })[]) {
       if (part.type === 'data-blocker' && part.data?.kind === 'needs_confirmation' && part.data.tool !== undefined) {
         const key = stableHash({ tool: part.data.tool, input: part.data.input });
-        pending.set(key, { tool: part.data.tool, input: part.data.input, reason: part.data.reason });
+        pending.set(key, {
+          tool: part.data.tool,
+          input: part.data.input,
+          reason: part.data.reason,
+          ...(part.data.stepId === undefined ? {} : { stepId: part.data.stepId }),
+        });
       } else if (part.type.startsWith('tool-') && part.state === 'output-available') {
         pending.delete(stableHash({ tool: part.type.slice('tool-'.length), input: part.input }));
       }

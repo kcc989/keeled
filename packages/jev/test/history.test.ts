@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { TypeSafeClient } from '@typesafe-ai/sdk';
-import { presentResult, reduceState, type AgentMessage, type Blocker, type ControllerContext, type Observation } from '@keeled/core';
+import { implicitTaskState, presentResult, reduceState, type AgentMessage, type Blocker, type ControllerContext, type Observation } from '@keeled/core';
 import { jev } from '../src/controller.ts';
 import { blockerNote, callHistory, readinessNote, repetitionNote, respondNotes } from '../src/history.ts';
 import { controllerState } from '../src/state.ts';
@@ -19,8 +19,11 @@ function context(observations: Observation[], conversation: AgentMessage[] = [])
       { name: 'get_users', description: 'List users.', risk: 'read', isPlanningTool: false, required: [] },
       { name: 'update_task_status', description: 'Update a task.', risk: 'write', isPlanningTool: false, required: ['task_id', 'status'] },
     ],
+    taskState: undefined,
     plan: undefined,
-    readySteps: [],
+    currentGoal: undefined,
+    currentStep: undefined,
+    goalStatuses: {},
     stepStatuses: {},
     verification: undefined,
     observations,
@@ -121,7 +124,7 @@ describe('call history', () => {
       },
     } as unknown as TypeSafeClient;
 
-    await jev({ client }).decide(context([call('get_users', {}, users, 'c1'), call('get_users', {}, users, 'c2')]));
+    await jev({ client }).control(context([call('get_users', {}, users, 'c1'), call('get_users', {}, users, 'c2')]));
 
     const request = requests[0]!;
     expect(request.state['tool_calls']).toEqual([
@@ -193,6 +196,131 @@ describe('what Jev is shown', () => {
     expect(presentResult(userDetails, 'c1')).toBe(userDetails);
   });
 
+});
+
+describe('current plan step', () => {
+  const currentStep = {
+    id: 'lookup',
+    objective: 'Find the reservation.',
+    dependencies: [],
+    constraints: [],
+    completionCriteria: 'The reservation is identified.',
+    evidence: [],
+  };
+
+  test('attributes one action to the runtime-selected step in one request', async () => {
+    const requests: { state: Record<string, unknown>; questions: Record<string, unknown> }[] = [];
+    const client = {
+      async systemOne(request: (typeof requests)[number]) {
+        requests.push(request);
+        return {
+          answers: {
+            action: { choice: 'get_users', confidence: 0.9, probabilities: { get_users: 0.9 } },
+          },
+          usage: { input_tokens: 10, output_tokens: 2 },
+        };
+      },
+    } as unknown as TypeSafeClient;
+
+    const answer = await jev({ client }).control({ ...context([]), currentGoal: currentStep, currentStep });
+
+    expect(requests).toHaveLength(1);
+    expect(Object.keys(requests[0]!.questions).sort()).toEqual(['action', 'goal_achieved']);
+    expect(answer.action).toEqual({
+      type: 'tool',
+      tool: 'get_users',
+      stepId: 'lookup',
+      objective: 'Find the reservation.',
+    });
+    expect(answer.confidence).toBe(0.9);
+    expect(answer.usage).toEqual({ calls: 1, inputTokens: 10, outputTokens: 2 });
+  });
+
+  test('crosses off the current step explicitly', async () => {
+    const requests: unknown[] = [];
+    const client = {
+      async systemOne(request: unknown) {
+        requests.push(request);
+        return {
+          answers: { action: { choice: 'step:complete', confidence: 0.9, probabilities: {} } },
+          usage: { input_tokens: 5, output_tokens: 1 },
+        };
+      },
+    } as unknown as TypeSafeClient;
+
+    const answer = await jev({ client }).control({ ...context([]), currentGoal: currentStep, currentStep });
+
+    expect(requests).toHaveLength(1);
+    expect(answer.action).toEqual({ type: 'complete_step', stepId: 'lookup' });
+    expect(answer.usage).toEqual({ calls: 1, inputTokens: 5, outputTokens: 1 });
+  });
+
+  test('uses a focused setup judgment instead of making plan compete with actions', async () => {
+    const requests: { questions: Record<string, { criteria?: Record<string, string> }> }[] = [];
+    const client = {
+      async systemOne(request: (typeof requests)[number]) {
+        requests.push(request);
+        return {
+          answers: {
+            action: { choice: 'respond:needs_input', confidence: 0.9, probabilities: {} },
+            update_task_state: { noul: 0.9 },
+          },
+          usage: { input_tokens: 8, output_tokens: 2 },
+        };
+      },
+    } as unknown as TypeSafeClient;
+    const implicit = implicitTaskState('Cancel two reservations.', 'plan-1');
+    const answer = await jev({ client }).control({
+      ...context([]),
+      taskState: implicit,
+      plan: implicit,
+      currentGoal: implicit.goals[0],
+      currentStep: implicit.steps[0],
+      availableTools: [
+        ...context([]).availableTools,
+        { name: 'plan', description: 'Create a plan.', risk: 'read', isPlanningTool: true, required: [] },
+      ],
+    });
+
+    expect(Object.keys(requests[0]!.questions).sort()).toEqual(['action', 'goal_achieved', 'update_task_state']);
+    expect(requests[0]!.questions['action']?.criteria).not.toHaveProperty('plan');
+    expect(answer.action).toEqual({ type: 'tool', tool: 'plan' });
+    expect(answer.rationale).toContain('task state needs ordered goals');
+    expect(answer.usage).toEqual({ calls: 1, inputTokens: 8, outputTokens: 2 });
+  });
+
+  test('keeps the selected domain action when setup does not require a plan', async () => {
+    const client = {
+      async systemOne() {
+        return {
+          answers: {
+            action: { choice: 'get_users', confidence: 0.8, probabilities: { get_users: 0.8 } },
+            update_task_state: { noul: 0.1 },
+          },
+          usage: { input_tokens: 4, output_tokens: 1 },
+        };
+      },
+    } as unknown as TypeSafeClient;
+    const implicit = implicitTaskState('Find one user.', 'plan-1');
+    const answer = await jev({ client }).control({
+      ...context([]),
+      taskState: implicit,
+      plan: implicit,
+      currentGoal: implicit.goals[0],
+      currentStep: implicit.steps[0],
+      availableTools: [
+        ...context([]).availableTools,
+        { name: 'plan', description: 'Create a plan.', risk: 'read', isPlanningTool: true, required: [] },
+      ],
+    });
+
+    expect(answer.action).toEqual({
+      type: 'tool',
+      tool: 'get_users',
+      stepId: 'request',
+      objective: 'Find one user.',
+    });
+  });
 });
 
 describe('authorization', () => {

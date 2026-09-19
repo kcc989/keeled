@@ -1,7 +1,7 @@
 import type { InferUIMessageChunk, UIMessageStreamWriterWithOutcome } from 'ai';
 import { createId, stableHash } from './ids.ts';
 import { errorMessage, isAbortError } from './errors.ts';
-import { readySteps, type Plan, type StepStatus } from './plan.ts';
+import { implicitPlan, readySteps, type Plan, type StepStatus } from './plan.ts';
 import { reduceState, statusesFor } from './state.ts';
 import { awaitingConfirmation } from './projection.ts';
 import { respondLabels, type AvailableTool, type ControllerContext, type ControllerDecision } from './controller.ts';
@@ -11,6 +11,7 @@ import type {
   BlockerRecord,
   DecisionRecord,
   ExecutionState,
+  KnownFactRecord,
   PlanRecord,
   ResolvedPolicy,
   StopReason,
@@ -94,6 +95,26 @@ export class Turn {
 
   start(): void {
     this.#write({ type: 'start', messageId: this.#options.messageId });
+    if (this.#state.plan === undefined) {
+      const plan = implicitPlan(this.#options.request, createId('plan'));
+      this.recordPlan({
+        planId: plan.id,
+        version: plan.version,
+        kind: plan.kind,
+        objective: plan.objective,
+        constraints: [...plan.constraints],
+        knownFacts: plan.knownFacts.map(fact => ({ ...fact })),
+        steps: plan.steps.map(step => ({ ...step })),
+        invalidatedStepIds: plan.steps.map(step => step.id),
+        carriedStatuses: Object.fromEntries(plan.steps.map(step => [step.id, 'pending' as const])),
+      });
+    } else {
+      this.recordKnownFact({
+        id: `fact-user-${this.#options.messageId}`,
+        statement: this.#options.request,
+        source: 'user',
+      });
+    }
   }
 
   beginCycle(): void {
@@ -108,14 +129,18 @@ export class Turn {
     const conversation = this.#conversation();
     const plan = this.#state.plan;
     const statuses = this.stepStatuses;
+    const goal = plan === undefined ? undefined : readySteps(plan, statuses)[0];
     return {
       request: this.#options.request,
       instructions: this.#options.instructions,
       conversation,
       state: this.#state,
       availableTools,
+      taskState: plan,
       plan,
-      readySteps: plan === undefined ? [] : readySteps(plan, statuses),
+      currentGoal: goal,
+      currentStep: goal,
+      goalStatuses: statuses,
       stepStatuses: statuses,
       verification,
       observations: this.#state.observations,
@@ -142,7 +167,10 @@ export class Turn {
     };
     this.#record({ type: 'data-decision', id: record.id, data: record });
     if (decision.usage !== undefined) this.#accountController(decision.usage);
-    if (decision.action.type === 'respond' && decision.action.outcome === 'completed') {
+    if (
+      decision.action.type === 'complete_step' ||
+      (decision.action.type === 'respond' && decision.action.outcome === 'completed')
+    ) {
       this.#pushAttempt(respondLabels.completed, undefined);
     }
     return record;
@@ -170,6 +198,11 @@ export class Turn {
   recordPlan(record: Omit<PlanRecord, 'id' | 'cycle'>): void {
     const full: PlanRecord = { ...record, id: createId('plan'), cycle: this.#cycle };
     this.#record({ type: 'data-plan', id: full.id, data: full });
+  }
+
+  recordKnownFact(fact: KnownFactRecord['fact']): void {
+    const record: KnownFactRecord = { id: createId('fact'), cycle: this.#cycle, fact };
+    this.#record({ type: 'data-fact', id: record.id, data: record });
   }
 
   recordBlocker(
@@ -311,7 +344,7 @@ export class Turn {
     return this.#conversation();
   }
 
-  /** Distinct evidence so far: tool outcomes and plan revisions, ignoring identical repeats. */
+  /** Distinct domain evidence so far, ignoring planning output and identical repeats. */
   distinctEvidence(): number {
     return this.#distinctEvidence();
   }
@@ -340,14 +373,12 @@ export class Turn {
     });
   }
 
-  /** Distinct tool outcomes and plan revisions so far; a repeated identical outcome adds nothing. */
+  /** Distinct tool outcomes so far; planning cannot manufacture progress by revising itself. */
   #distinctEvidence(): number {
     const distinct = new Set<string>();
     for (const observation of this.#state.observations) {
       if (observation.kind === 'tool-result' || observation.kind === 'tool-error') {
         distinct.add(stableHash([observation.kind, observation.tool, observation.input, observation.detail, observation.summary]));
-      } else if (observation.kind === 'plan') {
-        distinct.add(observation.id);
       }
     }
     return distinct.size;

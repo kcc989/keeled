@@ -1,77 +1,49 @@
 import { describe, expect, test } from 'bun:test';
-import { adoptProposal, parsePlanProposal, readySteps } from '../src/plan.ts';
+import { adoptTaskStateProposal, currentGoal, parseTaskStateProposal } from '../src/plan.ts';
 
 const base = {
   objective: 'Ship the change',
-  steps: [
-    { id: 's1', objective: 'Locate the file', dependencies: [] },
-    { id: 's2', objective: 'Apply the edit', dependencies: ['s1'] },
+  constraints: ['Keep the public API stable'],
+  knownFacts: ['The helper is exported.'],
+  goals: [
+    { id: 'locate', objective: 'Locate the file', dependencies: [], constraints: [] },
+    { id: 'edit', objective: 'Apply the edit', dependencies: [], constraints: [] },
   ],
 };
 
-describe('parsePlanProposal', () => {
-  test('accepts a valid proposal', () => {
-    expect(parsePlanProposal(base).steps).toHaveLength(2);
+describe('task state', () => {
+  test('accepts ordered goals, constraints, and facts', () => {
+    const proposal = parseTaskStateProposal(base);
+    expect(proposal.goals.map(goal => goal.id)).toEqual(['locate', 'edit']);
+    expect(proposal.constraints).toEqual(['Keep the public API stable']);
+    expect(proposal.knownFacts).toEqual(['The helper is exported.']);
   });
 
-  test('rejects duplicate step ids', () => {
-    expect(() =>
-      parsePlanProposal({ ...base, steps: [base.steps[0], base.steps[0]] }),
-    ).toThrow(/Duplicate step id/);
+  test('rejects duplicate goal ids', () => {
+    expect(() => parseTaskStateProposal({ ...base, goals: [base.goals[0], base.goals[0]] })).toThrow(/Duplicate goal id/);
   });
 
-  test('rejects unknown dependencies', () => {
-    expect(() =>
-      parsePlanProposal({ ...base, steps: [{ id: 'a', objective: 'x', dependencies: ['ghost'] }] }),
-    ).toThrow(/unknown step/);
-  });
-
-  test('rejects dependency cycles', () => {
-    expect(() =>
-      parsePlanProposal({
-        objective: 'x',
-        steps: [
-          { id: 'a', objective: 'a', dependencies: ['b'] },
-          { id: 'b', objective: 'b', dependencies: ['a'] },
-        ],
+  test('preserves achieved goals when new goals are added', () => {
+    const first = adoptTaskStateProposal(parseTaskStateProposal(base), undefined, () => 'task-1');
+    const revised = adoptTaskStateProposal(
+      parseTaskStateProposal({
+        ...base,
+        knownFacts: [...base.knownFacts, 'The user also requested tests.'],
+        goals: [...base.goals, { id: 'verify', objective: 'Run tests', dependencies: [], constraints: [] }],
       }),
-    ).toThrow(/cycle/);
-  });
-});
-
-describe('adoptProposal', () => {
-  test('assigns revision 1 for a first plan', () => {
-    const adoption = adoptProposal(parsePlanProposal(base), undefined, () => 'plan-1');
-    expect(adoption.plan.version).toBe(1);
-    expect(adoption.plan.id).toBe('plan-1');
-  });
-
-  test('keeps status for unchanged steps and invalidates changed ones', () => {
-    const first = adoptProposal(parsePlanProposal(base), undefined, () => 'plan-1');
-    const revised = adoptProposal(
-      parsePlanProposal({
-        objective: 'Ship the change',
-        steps: [
-          { id: 's1', objective: 'Locate the file', dependencies: [] },
-          { id: 's2', objective: 'Apply a different edit', dependencies: ['s1'] },
-        ],
-      }),
-      { plan: first.plan, statuses: { s1: 'done', s2: 'failed' } },
-      () => 'plan-2',
+      { taskState: first.taskState, statuses: { locate: 'done', edit: 'pending' } },
+      () => 'task-2',
     );
 
-    expect(revised.plan.id).toBe('plan-1');
-    expect(revised.plan.version).toBe(2);
-    expect(revised.carriedStatuses['s1']).toBe('done');
-    expect(revised.carriedStatuses['s2']).toBe('pending');
-    expect(revised.invalidatedStepIds).toEqual(['s2']);
+    expect(revised.taskState.id).toBe('task-1');
+    expect(revised.taskState.version).toBe(2);
+    expect(revised.carriedStatuses).toMatchObject({ locate: 'done', edit: 'pending', verify: 'pending' });
+    expect(revised.invalidatedGoalIds).toEqual(['verify']);
   });
-});
 
-describe('readySteps', () => {
-  test('returns only steps whose dependencies are done', () => {
-    const plan = adoptProposal(parsePlanProposal(base), undefined, () => 'plan-1').plan;
-    expect(readySteps(plan, { s1: 'pending', s2: 'pending' }).map(s => s.id)).toEqual(['s1']);
-    expect(readySteps(plan, { s1: 'done', s2: 'pending' }).map(s => s.id)).toEqual(['s2']);
+  test('selects the first goal that is not achieved', () => {
+    const state = adoptTaskStateProposal(parseTaskStateProposal(base), undefined, () => 'task-1').taskState;
+    expect(currentGoal(state, { locate: 'pending', edit: 'pending' })?.id).toBe('locate');
+    expect(currentGoal(state, { locate: 'done', edit: 'pending' })?.id).toBe('edit');
   });
 });

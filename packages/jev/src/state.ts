@@ -8,11 +8,20 @@ const resultBudget = 4_000;
 /** The state document Jev evaluates. It is data, never instructions. */
 export function controllerState(context: ControllerContext): { [key: string]: JsonValue } {
   return {
-    original_request: context.request,
+    latest_user_message: context.request,
     agent_instructions: context.instructions,
-    plan: context.plan === undefined ? null : digestPlan(context.plan, context.stepStatuses),
-    ready_steps: context.readySteps.map(step => ({ id: step.id, objective: step.objective })),
-    step_statuses: context.stepStatuses,
+    task_state: context.taskState === undefined ? null : digestPlan(context.taskState, context.goalStatuses),
+    current_goal:
+      context.currentGoal === undefined
+        ? null
+        : {
+            id: context.currentGoal.id,
+            objective: context.currentGoal.objective,
+            constraints: context.currentGoal.constraints,
+            completion_criteria: context.currentGoal.completionCriteria,
+            evidence: context.currentGoal.evidence,
+          },
+    goal_statuses: context.goalStatuses,
     // Tool calls in the order they were made, each with its reference, input, and result.
     // A large result appears as a page of complete records with its omissions stated.
     tool_calls: callHistory(context)

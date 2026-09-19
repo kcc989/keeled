@@ -108,28 +108,31 @@ describe('execution context', () => {
 
 describe('plan replacement', () => {
   test('invalidates verification for steps the revision changed', async () => {
+    const failingSearch = agentTool({
+      description: 'Search the repository and fail.',
+      inputSchema: z.object({}),
+      risk: 'read',
+      resolveInput: () => ({}),
+      execute: () => {
+        throw new Error('search failed');
+      },
+    });
     const controller = scriptedController({
       decisions: [
         { type: 'tool', tool: 'plan' },
-        { type: 'tool', tool: 'search', stepId: 'locate' },
+        { type: 'complete_step' },
+        { type: 'complete_step' },
+        { type: 'tool', tool: 'search' },
         { type: 'tool', tool: 'plan' },
         { type: 'respond', outcome: 'needs_input' },
       ],
-      assess: context => ({
-        steps: {
-          locate: { complete: true },
-          edit: { complete: context.state.planRevisions === 1 },
-          verify: { complete: false },
-        },
-        goalMet: false,
-      }),
     });
 
     const agent = createAgent({
       instructions: 'Do the change.',
       controller,
       model,
-      tools: { plan: scriptedPlanner([firstPlan, revisedPlan]), search: searchTool() },
+      tools: { plan: scriptedPlanner([firstPlan, revisedPlan]), search: failingSearch },
       planningTool: 'plan',
     });
 
@@ -139,19 +142,19 @@ describe('plan replacement', () => {
       data: { invalidatedStepIds: string[] };
     }[];
 
-    expect(plans).toHaveLength(2);
-    expect(plans[1]?.data.invalidatedStepIds).toEqual(['edit']);
+    expect(plans).toHaveLength(3);
+    expect(plans[2]?.data.invalidatedStepIds).toEqual(['edit']);
 
     // Reducing up to the revision shows the stale result was dropped, not carried.
-    const revisionIndex = last.parts.lastIndexOf(plans[1] as never);
+    const revisionIndex = last.parts.lastIndexOf(plans[2] as never);
     const atRevision = reduceState([
       { ...last, parts: last.parts.slice(0, revisionIndex + 1) },
     ]);
     expect(atRevision.verification['edit']).toBeUndefined();
     expect(atRevision.verification['locate']?.planVersion).toBe(1);
 
-    // The next cycle re-evaluates it against the new revision.
-    expect(result.state.verification['edit']?.planVersion).toBe(2);
+    // The revision reopens only the step whose execution contract changed.
+    expect(result.state.verification['edit']).toBeUndefined();
     expect(result.state.verification['locate']?.outcome).toBe('passed');
   });
 });
@@ -160,15 +163,8 @@ describe('terminal paths', () => {
   test('a controller failure ends the turn as an error with a response', async () => {
     const failing = {
       name: 'failing',
-      async decide() {
+      async control() {
         throw new Error('controller unavailable');
-      },
-      async assess() {
-        return {
-          steps: {},
-          goalMet: { complete: false, confidence: 1 },
-          planValid: { valid: true, confidence: 1 },
-        };
       },
     };
 

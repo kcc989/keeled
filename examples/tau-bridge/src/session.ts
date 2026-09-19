@@ -1,9 +1,8 @@
 import { wrapLanguageModel, type LanguageModel } from 'ai';
-import type { TypeSafeClient } from '@typesafe-ai/sdk';
 import {
   createAgent,
   evidenceTool,
-  planningTool,
+  taskStateTool,
   type Agent,
   type AgentMessage,
   type AgentPolicy,
@@ -26,7 +25,7 @@ export interface DecisionLog {
 }
 
 export interface TraceEntry {
-  kind: 'assess' | 'decide' | 'authorize' | 'review' | 'generate';
+  kind: 'control' | 'authorize' | 'review' | 'generate';
   ms: number;
   detail?: unknown;
 }
@@ -61,8 +60,6 @@ export interface SessionOptions {
   argumentsModel?: LanguageModel;
   /** Model used for state-changing tool arguments. Defaults to `argumentsModel`. */
   writeArgumentsModel?: LanguageModel;
-  /** Lets Jev confirm arguments that have exactly one known value, skipping the model. */
-  argumentClient?: TypeSafeClient;
   policy?: AgentPolicy;
 }
 
@@ -96,14 +93,15 @@ export class Session {
           (call, signal) => this.#requestTool(call, signal),
           options.argumentsModel === undefined ? undefined : timed(options.argumentsModel, trace),
           options.writeArgumentsModel === undefined ? undefined : timed(options.writeArgumentsModel, trace),
-          options.argumentClient,
         ),
         // Both run locally and are never sent to the remote side: one reads stored results,
-        // the other states objectives that selected actions then carry.
+        // the other maintains ordered goals and task state.
         evidence: evidenceTool(),
-        plan: planningTool(),
+        task_state: taskStateTool({
+          model: options.argumentsModel === undefined ? undefined : timed(options.argumentsModel, trace),
+        }),
       },
-      planningTool: 'plan',
+      planningTool: 'task_state',
       respond: respondWith(
         options.tools,
         options.argumentsModel === undefined ? undefined : timed(options.argumentsModel, trace),
@@ -187,22 +185,16 @@ function observe(
 ): Controller {
   return {
     name: controller.name,
-    async assess(context) {
+    async control(context) {
       const started = performance.now();
-      const assessment = await controller.assess(context);
+      const result = await controller.control(context);
       trace({
-        kind: 'assess',
+        kind: 'control',
         ms: Math.round(performance.now() - started),
-        detail: { goalMet: assessment.goalMet, steps: assessment.steps },
+        detail: { action: result.action },
       });
-      return assessment;
-    },
-    async decide(context) {
-      const started = performance.now();
-      const decision = await controller.decide(context);
-      trace({ kind: 'decide', ms: Math.round(performance.now() - started) });
-      onDecision(decision);
-      return decision;
+      onDecision(result);
+      return result;
     },
     ...(controller.reviewReply === undefined
       ? {}

@@ -30,8 +30,15 @@ export interface ControllerContext {
   readonly conversation: readonly AgentMessage[];
   readonly state: Readonly<ExecutionState>;
   readonly availableTools: readonly AvailableTool[];
+  readonly taskState: Readonly<Plan> | undefined;
+  /** @deprecated Use taskState. */
   readonly plan: Readonly<Plan> | undefined;
-  readonly readySteps: readonly PlanStep[];
+  /** The first ordered goal that is not achieved. */
+  readonly currentGoal: Readonly<PlanStep> | undefined;
+  /** @deprecated Use currentGoal. */
+  readonly currentStep: Readonly<PlanStep> | undefined;
+  readonly goalStatuses: Readonly<Record<string, StepStatus>>;
+  /** @deprecated Use goalStatuses. */
   readonly stepStatuses: Readonly<Record<string, StepStatus>>;
   readonly verification: VerificationSummary | undefined;
   readonly observations: readonly Observation[];
@@ -52,6 +59,7 @@ export type NextAction<Name extends string = string> =
       /** References of earlier results the call builds on or should not repeat. */
       evidence?: string[];
     }
+  | { type: 'complete_step'; stepId?: string }
   | { type: 'respond'; outcome: 'completed' | 'needs_input' | 'blocked' };
 
 /** An action that was held for the user's confirmation and has not run since. */
@@ -59,6 +67,7 @@ export interface AwaitingAction {
   tool: string;
   input: unknown;
   reason: string;
+  stepId?: string;
 }
 
 export interface ControllerDecision<Name extends string = string> {
@@ -69,12 +78,8 @@ export interface ControllerDecision<Name extends string = string> {
   usage?: UsageBucket;
 }
 
-export interface ProgressAssessment {
-  steps: Record<string, { complete: boolean; confidence: number }>;
-  goalMet: { complete: boolean; confidence: number };
-  planValid: { valid: boolean; confidence: number };
-  usage?: UsageBucket;
-}
+/** One bounded action for the runtime-owned plan state machine. */
+export type ControlResult<Name extends string = string> = ControllerDecision<Name>;
 
 /** A tool call whose input is resolved and validated, awaiting authorization to run. */
 export interface PendingAction {
@@ -110,8 +115,8 @@ export interface ReplyReview {
 
 export interface Controller {
   readonly name: string;
-  decide(context: ControllerContext): Promise<ControllerDecision>;
-  assess(context: ControllerContext): Promise<ProgressAssessment>;
+  /** Selects one action for the runtime-owned current plan step. */
+  control(context: ControllerContext): Promise<ControlResult>;
   /**
    * Judges a pending call before it runs, for risks listed in `policy.authorizeRisks`.
    * A controller without it authorizes nothing, and those calls run as before.
@@ -126,6 +131,8 @@ export const respondLabels = {
   needs_input: 'respond:needs_input',
   blocked: 'respond:blocked',
 } as const;
+
+export const stepCompleteLabel = 'step:complete' as const;
 
 export type RespondLabel = (typeof respondLabels)[keyof typeof respondLabels];
 

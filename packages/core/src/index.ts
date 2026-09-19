@@ -20,26 +20,43 @@ export type {
   SdkToolProjection,
 } from './tool.ts';
 
-export { planningTool } from './planning.ts';
+export { planningTool, taskStateTool } from './planning.ts';
 export { evidenceTool } from './evidence.ts';
-export { candidatesFor, factIndex, factType, recordIndex, recordsWith } from './facts.ts';
-export type { Fact, FactRecord, UserStatement } from './facts.ts';
-export { annotateRecords, emptyLedger, ledgerFacts, updateLedger } from './ledger.ts';
-export type { LedgerGoal, LedgerSlot, LedgerUpdate, RequestLedger } from './ledger.ts';
+export { candidatesFor, factIndex, factType } from './facts.ts';
+export type { Fact, UserStatement } from './facts.ts';
 export type { EvidencePage } from './evidence.ts';
 export type { PlanningToolOptions } from './planning.ts';
 
 export {
+  adoptTaskStateProposal,
   adoptProposal,
+  currentGoal,
   dependenciesSatisfied,
+  goalProposalSchema,
+  implicitTaskState,
+  parseTaskStateProposal,
   parsePlanProposal,
   planProposalSchema,
   planStepProposalSchema,
   readySteps,
+  taskStateProposalSchema,
 } from './plan.ts';
-export type { Plan, PlanProposal, PlanStep, StepStatus } from './plan.ts';
+export type {
+  Goal,
+  GoalStatus,
+  KnownFact,
+  Plan,
+  PlanKind,
+  PlanProposal,
+  PlanStep,
+  StepStatus,
+  TaskState,
+  TaskStateAdoption,
+  TaskStateKind,
+  TaskStateProposal,
+} from './plan.ts';
 
-export { parseRespondLabel, respondLabels } from './controller.ts';
+export { parseRespondLabel, respondLabels, stepCompleteLabel } from './controller.ts';
 export type {
   Authorization,
   AwaitingAction,
@@ -47,12 +64,12 @@ export type {
   BudgetView,
   Controller,
   ControllerContext,
+  ControlResult,
   ControllerDecision,
   Judgement,
   NextAction,
   PendingAction,
   ReplyReview,
-  ProgressAssessment,
   RespondLabel,
 } from './controller.ts';
 
@@ -64,6 +81,7 @@ export {
   presentResult,
   digestObservations,
   digestPlan,
+  digestTaskState,
   digestState,
   latestRequest,
   projectMessages,
@@ -100,6 +118,7 @@ export type {
   ModelCallOptions,
   Observation,
   PlanRecord,
+  KnownFactRecord,
   ResolvedPolicy,
   Risk,
   StateCheckpoint,
