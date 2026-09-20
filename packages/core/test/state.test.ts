@@ -74,6 +74,6 @@ describe('reduceState', () => {
     ]);
 
     expect(reduceState(messages)).toEqual(reduceState([]));
-    expect(reduceState([]).reducerVersion).toBe(4);
+    expect(reduceState([]).reducerVersion).toBe(5);
   });
 });

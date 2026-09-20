@@ -1,3 +1,4 @@
+import type { RecoveryConfig } from './recovery.ts';
 import type { TaskTracker } from './task.ts';
 import type { LanguageModel } from 'ai';
 import { ConfigurationError } from './errors.ts';
@@ -15,6 +16,7 @@ export interface AgentConfig<TOOLS extends AgentToolSet> {
   tools: TOOLS;
   /** Model used to generate tool input when a tool has no input resolver. */
   argumentsModel?: LanguageModel;
+  recovery?: RecoveryConfig;
   /** Replaces the default final-response generator. */
   respond?: RespondAdapter;
   policy?: AgentPolicy;
@@ -32,6 +34,7 @@ export interface AgentDefinition<TOOLS extends AgentToolSet> {
   controller: Controller;
   model: LanguageModel;
   argumentsModel?: LanguageModel;
+  recovery?: RecoveryConfig;
   tools: TOOLS;
   registry: Map<string, RegisteredTool>;
   respond?: RespondAdapter;
@@ -45,6 +48,10 @@ const defaultAuthorizeRisks: readonly Risk[] = ['write', 'destructive', 'unknown
 export function compileDefinition<TOOLS extends AgentToolSet>(config: AgentConfig<TOOLS>): AgentDefinition<TOOLS> {
   if (config.instructions.trim().length === 0) {
     throw new ConfigurationError('Agent instructions must not be empty.');
+  }
+
+  if (config.recovery?.maxAttemptsPerRevision !== undefined && config.recovery.maxAttemptsPerRevision !== 1) {
+    throw new ConfigurationError('recovery.maxAttemptsPerRevision must be 1.');
   }
 
   const registry = registerTools(config.tools);
@@ -83,6 +90,7 @@ export function compileDefinition<TOOLS extends AgentToolSet>(config: AgentConfi
     controller: config.controller,
     model: config.model,
     argumentsModel: config.argumentsModel,
+    recovery: config.recovery,
     tools: config.tools,
     registry,
     respond: config.respond,

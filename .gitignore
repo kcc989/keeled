@@ -5,3 +5,6 @@ dist
 .env.*
 !.env.example
 reviews/
+
+# Raw local benchmark traces
+experiments/recovery/airline-10*/

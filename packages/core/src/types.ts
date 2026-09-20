@@ -121,6 +121,7 @@ export interface InspectionRecord {
 
 export interface ExecutionState {
   reducerVersion: number;
+  recoveryRevisions: string[];
   task: TaskContract;
   uncertainOperations: UncertainOperation[];
   inspections: InspectionRecord[];
@@ -165,6 +166,7 @@ export interface TransitionRecord {
 }
 
 export type AgentDataParts = {
+  recovery: { revision: string };
   decision: DecisionRecord;
   blocker: BlockerRecord;
   transition: TransitionRecord;
@@ -193,6 +195,7 @@ export interface GenerationTrace {
 }
 
 export interface ModelCallOptions {
+  maxRetries?: number;
   purpose?: string;
   model?: LanguageModel;
   system?: string;

@@ -75,6 +75,7 @@ export class GenerationHost implements ManagedGeneration {
 
     try {
       mergeSignals(this.#options.abortSignal, options.abortSignal).throwIfAborted();
+      this.#options.usage.model.calls += 1;
       const result = await run();
       emit({
         inputTokens: result.totalUsage.inputTokens,
@@ -101,6 +102,7 @@ export class GenerationHost implements ManagedGeneration {
       messages: options.messages,
       abortSignal: signal,
       maxOutputTokens: options.maxOutputTokens,
+      maxRetries: options.maxRetries,
       temperature: options.temperature,
     };
 
@@ -112,7 +114,6 @@ export class GenerationHost implements ManagedGeneration {
 
   #account(usage: { inputTokens?: number | undefined; outputTokens?: number | undefined }): void {
     const bucket = this.#options.usage.model;
-    bucket.calls += 1;
     bucket.inputTokens += usage.inputTokens ?? 0;
     bucket.outputTokens += usage.outputTokens ?? 0;
   }
