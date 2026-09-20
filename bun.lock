@@ -30,7 +30,6 @@
         "@keeled/core": "workspace:*",
         "@keeled/jev": "workspace:*",
         "ai": "7.0.105",
-        "zod": "^4.1.8",
       },
     },
     "packages/core": {

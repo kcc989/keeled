@@ -7,7 +7,7 @@
  *   POST   /sessions/:id/tool   { id, content, error? }  -> BridgeEvent
  *   DELETE /sessions/:id
  */
-import { jev, jevObservedArguments } from '@keeled/jev';
+import { jev } from '@keeled/jev';
 import { openRouterModels, providersFromEnvironment } from './models.ts';
 import { Session, SessionConflictError, type SessionOptions, type ToolResult } from './session.ts';
 
@@ -25,8 +25,6 @@ const providers = providersFromEnvironment();
 const { model, argumentsModel, writeArgumentsModel } = openRouterModels(modelId, apiKey, providers);
 
 const controller = jev();
-
-const observedArgumentJudge = process.env['KEELED_OBSERVED_ARGUMENTS'] === '1' ? jevObservedArguments() : undefined;
 
 const policy = { generationTimeoutMs: 60_000, turnTimeoutMs: 240_000 };
 
@@ -64,7 +62,6 @@ const server = Bun.serve({
             model,
             argumentsModel,
             writeArgumentsModel,
-            observedArgumentJudge,
             policy,
           }),
         );
@@ -109,5 +106,5 @@ const server = Bun.serve({
 });
 
 console.log(
-  `Keeled bridge on http://localhost:${server.port} (OpenRouter model ${modelId} via ${providers.join(' → ')}; observed arguments ${observedArgumentJudge === undefined ? 'off' : 'on'})`,
+  `Keeled bridge on http://localhost:${server.port} (OpenRouter model ${modelId} via ${providers.join(' → ')})`,
 );

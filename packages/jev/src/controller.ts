@@ -11,7 +11,7 @@ import {
   type PendingAction,
   type UsageBucket,
 } from '@keeled/core';
-import { blockerNote, callHistory, readinessNote, repetitionNote, respondNotes } from './history.ts';
+import { blockerNote, callHistory, repetitionNote, respondNotes } from './history.ts';
 import { controllerState } from './state.ts';
 import { sdkValue } from './sdk.ts';
 
@@ -58,7 +58,6 @@ export function jev(options: JevControllerOptions = {}): Controller {
     async control(context: ControllerContext): Promise<ControlResult> {
       const history = callHistory(context);
       const criteria: Record<string, string> = {};
-      const readyCalls = new Map<string, { tool: string; candidateId: string }>();
 
       for (const tool of context.availableTools) {
         const guidance =
@@ -69,24 +68,9 @@ export function jev(options: JevControllerOptions = {}): Controller {
         criteria[tool.name] =
           `${tool.description} (risk: ${tool.risk})` +
           guidance +
-          `${repetitionNote(tool.name, history)}${blockerNote(tool.name, context.blockers)}` +
-          readinessNote(tool, context, history);
+          `${repetitionNote(tool.name, history)}${blockerNote(tool.name, context.blockers)}`;
 
         if (tool.resolutionBlocked !== undefined) delete criteria[tool.name];
-
-        if (tool.risk === 'read' && tool.candidates?.length) {
-          if (criteria[tool.name] !== undefined)
-            criteria[tool.name] +=
-              ' Use this fallback only when none of the ready calls for this tool fits; its arguments will need resolution.';
-
-          for (const candidate of tool.candidates) {
-            readyCalls.set(candidate.id, { tool: tool.name, candidateId: candidate.id });
-            criteria[candidate.id] =
-              `Execute ${tool.name} with exact input ${JSON.stringify(candidate.input)}. ` +
-              `${tool.description} ${candidate.description} Evidence: ${candidate.sources.join(', ')}. ` +
-              'Select only when this specific call advances the user request and its result is still needed.';
-          }
-        }
       }
 
       const notes = respondNotes(context.blockers);
@@ -115,13 +99,7 @@ export function jev(options: JevControllerOptions = {}): Controller {
       const label = answers.action.choice;
       const outcome = parseRespondLabel(label);
 
-      const action: NextAction =
-        outcome === undefined
-          ? {
-              type: 'tool',
-              ...(readyCalls.get(label) ?? { tool: label }),
-            }
-          : { type: 'respond', outcome };
+      const action: NextAction = outcome === undefined ? { type: 'tool', tool: label } : { type: 'respond', outcome };
 
       return {
         action,

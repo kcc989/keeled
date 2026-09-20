@@ -10,8 +10,6 @@ export { agentTool, agentToolBrand, isAgentTool, registerTools } from './tool.ts
 
 export type {
   ActionIntent,
-  CallCandidate,
-  CandidateProvider,
   AgentContext,
   AgentTool,
   AgentToolExecutionOptions,
@@ -26,10 +24,6 @@ export type {
 } from './tool.ts';
 
 export { evidenceTool } from './evidence.ts';
-
-export { candidatesFor, factIndex, factType } from './facts.ts';
-
-export type { Fact, UserStatement } from './facts.ts';
 
 export type { EvidencePage } from './evidence.ts';
 
@@ -115,21 +109,6 @@ export { calculateDecimals } from './arithmetic.ts';
 export { evidenceCalculationTool } from './calculate.ts';
 
 export { modelTaskTracker } from './task-tracker.ts';
-
-export { schemaReadCandidates, type CandidateTool } from './candidates.ts';
-
-export { observedReadCandidates, observedReadResolver } from './observed-candidates.ts';
-
-export type {
-  ObservedArgumentJudge,
-  ObservedArgumentQuery,
-  ObservedArgumentSelection,
-  ObservedCandidateOptions,
-  ObservedDomain,
-  ObservedOption,
-  ObservedResolutionTrace,
-  ObservedResolverOptions,
-} from './observed-candidates.ts';
 
 export type { GenerationTrace } from './types.ts';
 

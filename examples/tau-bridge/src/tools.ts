@@ -1,8 +1,6 @@
 import { jsonSchema, type LanguageModel } from 'ai';
 import {
   MissingInformation,
-  observedReadResolver,
-  schemaReadCandidates,
   agentTool,
   callHistory,
   presentResult,
@@ -11,8 +9,6 @@ import {
   type AgentMessage,
   type AgentToolSet,
   type Observation,
-  type ObservedArgumentJudge,
-  type ObservedResolutionTrace,
   type JsonValue,
   isJsonValue,
   jsonObject,
@@ -54,29 +50,18 @@ export function bridgeTools(
   call: ToolCallHandler,
   argumentsModel?: LanguageModel,
   writeArgumentsModel?: LanguageModel,
-  observedArgumentJudge?: ObservedArgumentJudge,
-  onObservedResolution?: (trace: ObservedResolutionTrace) => void,
 ): AgentToolSet {
   const tools: AgentToolSet = {};
 
   for (const spec of specs) {
     const schema = jsonSchema(spec.parameters);
 
-    const observedResolver =
-      observedArgumentJudge === undefined
-        ? undefined
-        : observedReadResolver(spec, specs, observedArgumentJudge, { onResolution: onObservedResolution });
-
     tools[spec.name] = agentTool({
       description: describe(spec),
       inputSchema: schema,
       risk: spec.risk ?? 'unknown',
       repeat: spec.repeat ?? 'allow',
-      candidates: schemaReadCandidates(spec, specs),
       resolveInput: async (context) => {
-        const observed = await observedResolver?.(context);
-
-        if (observed !== undefined) return observed;
         const model = spec.risk === 'read' ? argumentsModel : (writeArgumentsModel ?? argumentsModel);
 
         return resolveInput(spec, context, model);
