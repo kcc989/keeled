@@ -49,6 +49,24 @@ export function compileDefinition<TOOLS extends AgentToolSet>(config: AgentConfi
 
   const registry = registerTools(config.tools);
 
+  if (config.controller.inputMode === 'joint') {
+    const customResolvers = [...registry.values()].filter((tool) => tool.resolveInput !== undefined);
+
+    if (customResolvers.length > 0) {
+      throw new ConfigurationError(
+        `Joint input generation does not support custom resolvers: ${customResolvers.map((tool) => tool.name).join(', ')}.`,
+      );
+    }
+
+    const modelOverrides = [...registry.values()].filter((tool) => tool.model !== undefined);
+
+    if (modelOverrides.length > 0) {
+      throw new ConfigurationError(
+        `Joint input generation does not support per-tool model overrides: ${modelOverrides.map((tool) => tool.name).join(', ')}.`,
+      );
+    }
+  }
+
   const policy = config.policy ?? {};
   const maxSteps = policy.maxSteps ?? 30;
 

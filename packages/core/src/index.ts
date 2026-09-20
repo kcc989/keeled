@@ -29,6 +29,10 @@ export type { EvidencePage } from './evidence.ts';
 
 export { parseRespondLabel, respondLabels } from './controller.ts';
 
+export { jointController } from './joint-controller.ts';
+
+export type { JointControllerOptions } from './joint-controller.ts';
+
 export type {
   Authorization,
   AwaitingAction,
@@ -85,6 +89,9 @@ export type {
   ExecutionState,
   InspectionRecord,
   ManagedGeneration,
+  GeneratedToolCall,
+  GeneratedToolCallsResult,
+  ModelToolContract,
   ModelCallOptions,
   Observation,
   ResolvedPolicy,

@@ -66,6 +66,8 @@ export interface SessionOptions {
   argumentsModel?: LanguageModel;
   /** Model used for state-changing tool arguments. Defaults to `argumentsModel`. */
   writeArgumentsModel?: LanguageModel;
+  /** Complete external tool inputs come from a joint controller decision. */
+  jointInput?: boolean;
   policy?: AgentPolicy;
 }
 
@@ -103,6 +105,7 @@ export class Session {
           (call, signal) => this.#requestTool(call, signal),
           options.argumentsModel === undefined ? undefined : options.argumentsModel,
           options.writeArgumentsModel === undefined ? undefined : options.writeArgumentsModel,
+          options.jointInput === true ? 'joint' : 'resolved',
         ),
         evidence: evidenceTool(),
         arithmetic: evidenceCalculationTool(),
@@ -200,17 +203,28 @@ function observe(
 ): Controller {
   const observed: Controller = {
     name: controller.name,
+    inputMode: controller.inputMode,
     async control(context) {
       const started = performance.now();
-      const result = await controller.control(context);
-      trace({
-        kind: 'control',
-        ms: Math.round(performance.now() - started),
-        detail: { action: result.action },
-      });
-      onDecision(result);
 
-      return result;
+      try {
+        const result = await controller.control(context);
+        trace({
+          kind: 'control',
+          ms: Math.round(performance.now() - started),
+          detail: { action: result.action },
+        });
+        onDecision(result);
+
+        return result;
+      } catch (error) {
+        trace({
+          kind: 'control',
+          ms: Math.round(performance.now() - started),
+          detail: { error: error instanceof Error ? error.message : String(error) },
+        });
+        throw error;
+      }
     },
   };
 

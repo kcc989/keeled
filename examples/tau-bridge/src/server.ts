@@ -8,6 +8,7 @@
  *   DELETE /sessions/:id
  */
 import { jev } from '@keeled/jev';
+import { jointController } from '@keeled/core';
 import { openRouterModels, providersFromEnvironment } from './models.ts';
 import { Session, SessionConflictError, type SessionOptions, type ToolResult } from './session.ts';
 
@@ -24,7 +25,19 @@ const providers = providersFromEnvironment();
 
 const { model, argumentsModel, writeArgumentsModel } = openRouterModels(modelId, apiKey, providers);
 
-const controller = jev();
+const controllerName = process.env['KEELED_CONTROLLER'] ?? 'jev';
+
+if (controllerName !== 'jev' && controllerName !== 'joint') {
+  console.error('KEELED_CONTROLLER must be "jev" or "joint".');
+  process.exit(1);
+}
+
+const jevController = jev();
+
+const controller =
+  controllerName === 'joint'
+    ? jointController({ model: argumentsModel, authorize: jevController.authorize })
+    : jevController;
 
 const policy = { generationTimeoutMs: 60_000, turnTimeoutMs: 240_000 };
 
@@ -62,6 +75,7 @@ const server = Bun.serve({
             model,
             argumentsModel,
             writeArgumentsModel,
+            jointInput: controllerName === 'joint',
             policy,
           }),
         );
@@ -106,5 +120,5 @@ const server = Bun.serve({
 });
 
 console.log(
-  `Keeled bridge on http://localhost:${server.port} (OpenRouter model ${modelId} via ${providers.join(' → ')})`,
+  `Keeled bridge on http://localhost:${server.port} (${controllerName} controller; OpenRouter model ${modelId} via ${providers.join(' → ')})`,
 );

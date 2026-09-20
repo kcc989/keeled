@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { z } from 'zod';
+import { jsonSchema } from 'ai';
 import { createTestAgent as createAgent } from './fixtures.ts';
 import { agentTool } from '../src/tool.ts';
 import { scriptedController, stubModel, userMessage } from '../src/testing.ts';
@@ -287,6 +288,70 @@ describe('termination paths', () => {
 });
 
 describe('input resolution', () => {
+  test('raw JSON Schema is validated on both prepared and resolved paths', async () => {
+    let preparedExecutions = 0;
+
+    const raw = agentTool({
+      description: 'Accept a positive count.',
+      inputSchema: jsonSchema<{ count: number }>({
+        type: 'object',
+        properties: { count: { type: 'integer', minimum: 1 } },
+        required: ['count'],
+        additionalProperties: false,
+      }),
+      risk: 'read',
+      execute: () => {
+        preparedExecutions++;
+
+        return { ok: true };
+      },
+    });
+
+    const result = await createAgent({
+      instructions: 'Use valid counts.',
+      controller: scriptedController({
+        decisions: [
+          { type: 'tool_call', tool: 'raw', input: { count: 0 } },
+          { type: 'respond', outcome: 'blocked' },
+        ],
+      }),
+      model,
+      tools: { raw },
+    }).run({ messages: [userMessage('Run it.')] });
+
+    expect(preparedExecutions).toBe(0);
+    expect(result.state.blockers.at(0)?.reason).toContain('schema validation');
+
+    let resolvedExecutions = 0;
+
+    const resolved = agentTool({
+      description: 'Accept a positive count.',
+      inputSchema: raw.inputSchema,
+      risk: 'read',
+      resolveInput: () => ({ count: 0 }),
+      execute: () => {
+        resolvedExecutions++;
+
+        return { ok: true };
+      },
+    });
+
+    const resolvedResult = await createAgent({
+      instructions: 'Use valid counts.',
+      controller: scriptedController({
+        decisions: [
+          { type: 'tool', tool: 'raw' },
+          { type: 'respond', outcome: 'blocked' },
+        ],
+      }),
+      model,
+      tools: { raw: resolved },
+    }).run({ messages: [userMessage('Run it.')] });
+
+    expect(resolvedExecutions).toBe(0);
+    expect(resolvedResult.state.blockers.at(0)?.reason).toContain('schema validation');
+  });
+
   test('a resolver failure blocks the call and is recorded as evidence', async () => {
     const broken = agentTool({
       description: 'Has a failing resolver.',

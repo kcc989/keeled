@@ -1,4 +1,5 @@
 import { abortable } from './async.ts';
+import { validateInput } from './validation.ts';
 import { applyTaskPatch } from './task.ts';
 import { createUIMessageStream, createUIMessageStreamResponse } from 'ai';
 import { asSchema, jsonSchema, safeValidateTypes } from '@ai-sdk/provider-utils';
@@ -292,19 +293,42 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
         const resume = resumable.shift();
 
         if (resume !== undefined) {
-          const action: Extract<NextAction, { type: 'tool' }> = {
-            type: 'tool',
+          const action: Extract<NextAction, { type: 'tool_call' }> = {
+            type: 'tool_call',
             tool: resume.tool,
+            input: resume.input,
           };
 
           this.#turn.recordDecision({
             action,
             rationale: 'The runtime resumed the exact action held for confirmation.',
           });
-          await this.#callTool(action, { preparedInput: resume.input });
+          await this.#callTool(action);
         } else {
-          const context = this.#turn.decisionContext(await this.#availableTools(), this.#catalog);
-          const control = await abortable(this.#abort.signal, () => this.#definition.controller.control(context));
+          const context = this.#turn.decisionContext(
+            await this.#availableTools(),
+            this.#catalog,
+            this.#generation.generateToolCalls,
+          );
+
+          let control;
+
+          try {
+            control = await abortable(this.#abort.signal, () => this.#definition.controller.control(context));
+          } catch (error) {
+            if (this.#turn.isAborted() || isAbortError(error)) throw error;
+
+            if (this.#definition.controller.inputMode !== 'joint') throw error;
+
+            this.#turn.recordTransition('controller-error', errorMessage(error));
+            this.#turn.recordBlocker(
+              'controller_error',
+              `Controller generation failed: ${errorMessage(error)}`,
+              'Choose one valid next action in the next cycle.',
+            );
+            continue;
+          }
+
           const action = this.#normalize(control.action, context);
 
           this.#turn.recordDecision({ ...control, action });
@@ -337,7 +361,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
             break;
           }
 
-          await this.#callTool(action);
+          await this.#callTool(action, { selectedFrom: context });
         }
 
         // The first report at one evidence state is feedback. Repeating without any new
@@ -397,18 +421,16 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
   // --- decision support -------------------------------------------------
 
   #normalize(action: NextAction, context: ControllerContext): NextAction {
-    if (action.type === 'respond') return action;
+    void context;
 
-    return context.availableTools.some((tool) => tool.name === action.tool)
-      ? action
-      : { type: 'respond', outcome: 'blocked' };
+    return action;
   }
 
   // --- tool invocation --------------------------------------------------
 
   async #callTool(
-    action: Extract<NextAction, { type: 'tool' }>,
-    callOptions: { preparedInput?: JsonValue } = {},
+    action: Extract<NextAction, { type: 'tool' | 'tool_call' }>,
+    callOptions: { preparedInput?: JsonValue; selectedFrom?: ControllerContext } = {},
   ): Promise<void> {
     const tool = this.#definition.registry.get(action.tool);
 
@@ -418,6 +440,20 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
         `Tool "${action.tool}" is not registered.`,
         'Choose one of the available tools, or respond to the user.',
         { tool: action.tool },
+      );
+
+      return;
+    }
+
+    if (
+      callOptions.selectedFrom !== undefined &&
+      !callOptions.selectedFrom.availableTools.some((available) => available.name === tool.name)
+    ) {
+      this.#turn.recordBlocker(
+        'unavailable',
+        `Tool "${tool.name}" is not currently available.`,
+        'Choose one of the currently available tools, or respond to the user.',
+        { tool: tool.name, input: action.type === 'tool_call' ? action.input : undefined },
       );
 
       return;
@@ -438,7 +474,10 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
 
     const suspended = this.#resolutionFailures.get(tool.name);
 
-    if (!('preparedInput' in callOptions) && suspended?.revision === this.#resolutionVersion(tool)) {
+    const hasPreparedInput = action.type === 'tool_call' || 'preparedInput' in callOptions;
+    const preparedInput = action.type === 'tool_call' ? action.input : callOptions.preparedInput;
+
+    if (!hasPreparedInput && suspended?.revision === this.#resolutionVersion(tool)) {
       this.#turn.recordToolAttempt(tool.name, { unresolved: true });
       this.#turn.recordBlocker(
         'no_progress',
@@ -453,8 +492,8 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     let input: JsonValue;
 
     try {
-      if ('preparedInput' in callOptions) {
-        input = callOptions.preparedInput;
+      if (hasPreparedInput) {
+        input = preparedInput;
       } else {
         input = await abortable(this.#abort.signal, () => this.#resolveInput(tool, context));
       }
@@ -486,7 +525,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       return;
     }
 
-    const validated = await safeValidateTypes({ value: input, schema: tool.inputSchema });
+    const validated = await validateInput(tool, input);
 
     if (!validated.success) {
       this.#resolutionFailures.set(tool.name, {
@@ -667,7 +706,12 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       effects: inspection?.effects,
     };
 
-    const context = this.#turn.decisionContext(await this.#availableTools(), this.#catalog);
+    const context = this.#turn.decisionContext(
+      await this.#availableTools(),
+      this.#catalog,
+      this.#generation.generateToolCalls,
+    );
+
     const answer = await abortable(this.#abort.signal, () => controller.authorize!(context, action));
 
     if (answer.usage !== undefined) this.#turn.accountController(answer.usage);
@@ -953,7 +997,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
 
   // --- context ----------------------------------------------------------
 
-  #agentContext(action: Extract<NextAction, { type: 'tool' }> | undefined): AgentContext {
+  #agentContext(action: Extract<NextAction, { type: 'tool' | 'tool_call' }> | undefined): AgentContext {
     const conversation = [...this.#originalMessages];
 
     const awaiting =
@@ -1005,6 +1049,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
         description: tool.description,
         risk: tool.risk,
         required: await requiredParameters(tool),
+        inputSchema: tool.inputSchema,
         available,
       };
 
@@ -1017,6 +1062,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
         description: tool.description,
         risk: tool.risk,
         required: await requiredParameters(tool),
+        inputSchema: tool.inputSchema,
       };
 
       const failure = this.#resolutionFailures.get(tool.name);

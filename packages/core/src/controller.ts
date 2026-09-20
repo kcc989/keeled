@@ -1,5 +1,14 @@
-import type { AgentMessage, Blocker, ExecutionState, Observation, Risk, UsageBucket } from './types.ts';
+import type {
+  AgentMessage,
+  Blocker,
+  ExecutionState,
+  ManagedGeneration,
+  Observation,
+  Risk,
+  UsageBucket,
+} from './types.ts';
 import type { JsonObject, JsonValue } from './json.ts';
+import type { FlexibleSchema } from 'ai';
 
 export interface AvailableTool {
   name: string;
@@ -7,6 +16,8 @@ export interface AvailableTool {
   risk: Risk;
   /** Names of the input's required top-level parameters, so a controller can judge readiness. */
   required: string[];
+  /** The registered model-facing input contract. It never exposes execution callbacks. */
+  inputSchema: FlexibleSchema<any>;
   /** Ordinary argument resolution is suspended until evidence changes. */
   resolutionBlocked?: string;
 }
@@ -31,12 +42,19 @@ export interface ControllerContext {
   readonly awaitingConfirmation: readonly AwaitingAction[];
   readonly budget: BudgetView;
   readonly abortSignal: AbortSignal;
+  /** Managed model generation with the run's accounting, timeout, and cancellation. */
+  readonly generateToolCalls: ManagedGeneration['generateToolCalls'];
 }
 
 export type NextAction<Name extends string = string> =
   | {
       type: 'tool';
       tool: Name;
+    }
+  | {
+      type: 'tool_call';
+      tool: Name;
+      input: JsonValue;
     }
   | { type: 'respond'; outcome: 'completed' | 'needs_input' | 'blocked' };
 
@@ -85,6 +103,8 @@ export interface Authorization {
 
 export interface Controller {
   readonly name: string;
+  /** Joint controllers supply complete tool calls and cannot use custom input resolvers. */
+  readonly inputMode?: 'joint';
   /** Selects the next tool or a reply. */
   control(context: ControllerContext): Promise<ControlResult>;
   /**

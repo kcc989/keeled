@@ -97,6 +97,7 @@ export class Turn {
   decisionContext(
     availableTools: readonly AvailableTool[],
     toolCatalog: ControllerContext['toolCatalog'] = availableTools.map((tool) => ({ ...tool, available: true })),
+    generateToolCalls: ControllerContext['generateToolCalls'],
   ): ControllerContext {
     const conversation = this.#conversation();
 
@@ -116,6 +117,7 @@ export class Turn {
         remaining: Math.max(0, this.#options.policy.maxSteps - this.#state.stepsUsed),
       },
       abortSignal: this.#options.abortSignal,
+      generateToolCalls,
     };
   }
 

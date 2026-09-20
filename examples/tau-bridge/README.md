@@ -70,6 +70,12 @@ bun run tau3 <domain> --task-ids 0 1 2 --max-concurrency 1
 bun run tau3:first airline 10
 ```
 
+Select the opt-in joint tool-and-input controller without changing the default Jev path:
+
+```bash
+bun run tau3:first airline 10 --keeled-controller joint
+```
+
 `tau3` starts the bridge, runs `tau2 run --domain <domain> --agent keeled` in the τ³-bench
 checkout, and stops the bridge. Any other `tau2 run` option passes through. The domain is passed through without special handling. The default is **one trial per task**;
 keep screening runs at one trial until a promising change warrants a larger evaluation.

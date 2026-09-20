@@ -101,7 +101,7 @@ function applyPart(state: ExecutionState, part: AgentMessage['parts'][number], c
     state.cycle = Math.max(state.cycle, record.cycle);
     state.stepsUsed += 1;
     delete state.stopReason;
-    context.tool = record.action.type === 'tool' ? record.action.tool : undefined;
+    context.tool = record.action.type === 'respond' ? undefined : record.action.tool;
 
     return;
   }
@@ -124,6 +124,8 @@ function applyPart(state: ExecutionState, part: AgentMessage['parts'][number], c
   if (type === 'data-transition') {
     // SAFETY: the adjacent validation or framework contract establishes the asserted type.
     const record = (part as { data: TransitionRecord }).data;
+
+    if (record.kind === 'controller-error') state.stepsUsed += 1;
 
     if (record.stopReason !== undefined) state.stopReason = record.stopReason;
 

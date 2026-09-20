@@ -20,7 +20,7 @@ function call(tool: string, input: JsonValue, output: JsonValue, id: string): Ob
 }
 
 function context(observations: Observation[], conversation: AgentMessage[] = []): ControllerContext {
-  return {
+  return testFixture<ControllerContext>({
     request: 'Mark my task done.',
     instructions: 'Policy.',
     conversation,
@@ -34,7 +34,7 @@ function context(observations: Observation[], conversation: AgentMessage[] = [])
     awaitingConfirmation: [],
     budget: { stepsUsed: 0, maxSteps: 30, remaining: 30 },
     abortSignal: new AbortController().signal,
-  };
+  });
 }
 
 const users = [{ user_id: 'user_1', tasks: ['task_1'] }];
