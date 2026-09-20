@@ -16,6 +16,12 @@ validates and authorizes the selected call, executes it, and returns its result 
 Optional task tracking retains requested outcomes and checks completion against execution evidence.
 The public interface uses promises and AI SDK types.
 
+## Experiments
+
+See the [experiment record](experiments/README.md) before repeating controller changes.
+The stall-recovery prototype was rejected after an 8/10 airline screen
+against a saved 9/10 baseline. Only its documentation and results are retained.
+
 ## Packages
 
 | Package                | Contents                                                         |

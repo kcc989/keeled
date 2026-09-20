@@ -2,6 +2,13 @@
 
 Use concise Simplified Technical English in responses.
 
+## Prior experiments
+
+Before changing the controller, stall recovery, or benchmark execution, read
+[`experiments/README.md`](experiments/README.md). Preserve recorded failures and
+measurement limits. A rejected experiment is not a supported default or evidence
+that a broader idea cannot work.
+
 ## Never optimize for a benchmark with use-case-specific code
 
 Keeled is a general agent framework. Benchmarks test the framework; they must not shape
