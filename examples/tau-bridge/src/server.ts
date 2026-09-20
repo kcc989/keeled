@@ -32,7 +32,7 @@ if (controllerName !== 'jev' && controllerName !== 'joint') {
   process.exit(1);
 }
 
-const jevController = jev();
+const jevController = jev({ model: process.env['KEELED_JEV_MODEL'] });
 
 const controller =
   controllerName === 'joint'
@@ -72,6 +72,7 @@ const server = Bun.serve({
             tools: body.tools,
             history: body.history,
             controller,
+            discovery: process.env['KEELED_DISCOVERY'] === '1' ? { enabled: true, maxCalls: 8 } : undefined,
             model,
             argumentsModel,
             writeArgumentsModel,

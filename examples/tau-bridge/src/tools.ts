@@ -321,6 +321,7 @@ export function respondWith(specs: readonly ToolSpec[], draftModel?: LanguageMod
         `Tool calls so far:\n${callLog(context.conversation, context.state.observations)}`,
         `Blockers this turn:\n${blockers(context.state.blockers)}`,
         `Retained goals and constraints:\n${JSON.stringify(context.state.task)}`,
+        `Discovery judgments and coverage (not execution permission):\n${JSON.stringify(context.state.discovery)}`,
         `Application-verified facts and effects (do not replace with mental arithmetic):\n${JSON.stringify(context.state.inspections)}`,
       ].join('\n\n'),
       messages: projectMessages(context.conversation),

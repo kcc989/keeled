@@ -302,3 +302,41 @@ do not change execution if the observer throws. The bridge saves these in each t
 extraction while keeping the default model for completion verification. The bridge uses
 its existing fast argument model for this extraction. Evidence reads normalize page defaults
 and reject identical repeats within a turn; different pages remain available.
+
+### Experimental bounded discovery
+
+Opt in to inspect an observed collection without selecting a tool and generating its
+arguments again for every record:
+
+```ts
+const agent = createAgent({
+  instructions,
+  model,
+  controller: jev(),
+  tools,
+  discovery: { enabled: true, maxCalls: 8 },
+});
+```
+
+Discovery planning uses `argumentsModel` when supplied, otherwise `model`.
+An LLM proposes a relationship between an observed collection and a read tool. Code
+binds the source values, validates inputs, and advances through the collection. Jev
+checks each returned record against the proposed objective and constraints. All reads
+use the normal executor, policy, inspection, and authorization checks.
+
+This first version supports one required input bound to scalar values or fields within
+collection items. It offers complete arrays of at most 64 items, within a bounded
+traversal. Unsupported schemas, transformed inputs, previously attempted candidates,
+and uncertain relationships fall back to ordinary reasoning. There are no domain
+adapters or application-supplied field mappings.
+
+`maxCalls` bounds prepared reads per turn and also caps planning attempts. The normal
+step and time budgets still apply. `any` procedures can stop at a match; `unique` and
+`all` procedures inspect the full supplied collection unless blocked or uncertain.
+Persisted `data-discovery` records report matches, ambiguity, and incomplete coverage.
+These are model judgments, not permission, proof of global coverage, or task completion.
+Active procedures do not survive a new user turn; their audit records remain in messages.
+
+Custom controllers must implement `evaluateDiscovery` when discovery is enabled.
+The ordinary configuration remains the default. See
+[the experiment report](docs/experiments/discovery-continuation.md) for measured results.

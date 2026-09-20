@@ -316,3 +316,36 @@ describe('authorization', () => {
     );
   });
 });
+
+test('discovery evaluates only the objective, constraints, and returned record', async () => {
+  const requests: { state: JsonObject; model: string }[] = [];
+
+  const client = testFixture<TypeSafeClient>({
+    async systemOne(request: (typeof requests)[number]) {
+      requests.push(request);
+
+      return {
+        model: 'jev-test',
+        answers: {
+          match: { choice: 'uncertain', confidence: 0.8, probabilities: { match: 0.1, no_match: 0.1, uncertain: 0.8 } },
+        },
+        usage: { input_tokens: 100, output_tokens: 10 },
+      };
+    },
+  });
+
+  const question = {
+    objective: 'Is this the requested document?',
+    constraints: ['Must be published'],
+    record: { title: 'Draft notes' },
+  };
+
+  const answer = await jev({ client, model: 'jev-test' }).evaluateDiscovery!(question, new AbortController().signal);
+  expect(requests).toEqual([expect.objectContaining({ state: question, model: 'jev-test' })]);
+  expect(Object.keys(requests[0]!.state)).toEqual(['objective', 'constraints', 'record']);
+  expect(answer).toMatchObject({
+    verdict: 'uncertain',
+    model: 'jev-test',
+    usage: { calls: 1, inputTokens: 100, outputTokens: 10 },
+  });
+});

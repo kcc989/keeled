@@ -1,3 +1,4 @@
+import type { DiscoveryRecord } from './discovery.ts';
 import type { TaskContract } from './task.ts';
 import type { JsonObject, JsonValue } from './json.ts';
 import type { FlexibleSchema, LanguageModel, ModelMessage, Tool, ToolSet, UIMessage } from 'ai';
@@ -125,6 +126,7 @@ export interface ExecutionState {
   task: TaskContract;
   uncertainOperations: UncertainOperation[];
   inspections: InspectionRecord[];
+  discovery: DiscoveryRecord[];
   cycle: number;
   stepsUsed: number;
   observations: Observation[];
@@ -163,7 +165,17 @@ export interface BlockerRecord extends Blocker {}
 export interface TransitionRecord {
   id: string;
   cycle: number;
-  kind: 'cycle-start' | 'controller-error' | 'limit' | 'cancelled' | 'error' | 'finish' | 'policy-block' | 'authorized';
+  kind:
+    | 'discovery'
+    | 'discovery-error'
+    | 'cycle-start'
+    | 'controller-error'
+    | 'limit'
+    | 'cancelled'
+    | 'error'
+    | 'finish'
+    | 'policy-block'
+    | 'authorized';
   detail?: string;
   stopReason?: StopReason;
 }
@@ -175,6 +187,7 @@ export type AgentDataParts = {
   task: TaskContract;
   operation: UncertainOperation;
   inspection: InspectionRecord;
+  discovery: DiscoveryRecord;
 };
 
 export type AgentMessage<TOOLS extends UIToolProjection = UIToolProjection> = UIMessage<
