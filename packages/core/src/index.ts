@@ -1,10 +1,13 @@
 export { Agent, compileDefinition, createAgent } from './agent.ts';
+
 export type { AgentConfig, AgentDefinition, RunOptions } from './agent.ts';
 
 export { AgentExecution } from './execution.ts';
+
 export type { RespondAdapter, RespondContext } from './execution.ts';
 
 export { agentTool, agentToolBrand, isAgentTool, registerTools } from './tool.ts';
+
 export type {
   ActionIntent,
   CallCandidate,
@@ -23,11 +26,15 @@ export type {
 } from './tool.ts';
 
 export { evidenceTool } from './evidence.ts';
+
 export { candidatesFor, factIndex, factType } from './facts.ts';
+
 export type { Fact, UserStatement } from './facts.ts';
+
 export type { EvidencePage } from './evidence.ts';
 
 export { parseRespondLabel, respondLabels } from './controller.ts';
+
 export type {
   Authorization,
   AwaitingAction,
@@ -44,6 +51,7 @@ export type {
 } from './controller.ts';
 
 export { emptyState, reduceState, reducerVersion } from './state.ts';
+
 export {
   awaitingConfirmation,
   callHistory,
@@ -54,7 +62,9 @@ export {
   latestRequest,
   projectMessages,
 } from './projection.ts';
+
 export type { CallRecord } from './projection.ts';
+
 export { GenerationHost } from './generation.ts';
 
 export {
@@ -93,15 +103,38 @@ export type {
 } from './types.ts';
 
 export type { UncertainOperation } from './types.ts';
+
 export type { TaskContract, TaskGoal, TaskItem, TaskPatch, TaskTracker, GoalEvidence } from './task.ts';
+
 export { emptyTask, applyTaskPatch } from './task.ts';
+
 export type { InputInspection } from './tool.ts';
 
 export { calculateDecimals } from './arithmetic.ts';
+
 export { evidenceCalculationTool } from './calculate.ts';
 
 export { modelTaskTracker } from './task-tracker.ts';
 
 export { schemaReadCandidates, type CandidateTool } from './candidates.ts';
 
+export { observedReadCandidates, observedReadResolver } from './observed-candidates.ts';
+
+export type {
+  ObservedArgumentJudge,
+  ObservedArgumentQuery,
+  ObservedArgumentSelection,
+  ObservedCandidateOptions,
+  ObservedDomain,
+  ObservedOption,
+  ObservedResolutionTrace,
+  ObservedResolverOptions,
+} from './observed-candidates.ts';
+
 export type { GenerationTrace } from './types.ts';
+
+export type { JsonObject, JsonPrimitive, JsonValue } from './json.ts';
+
+export { isJsonValue, jsonNumber, jsonObject, jsonString } from './json.ts';
+
+export { stableHash } from './ids.ts';

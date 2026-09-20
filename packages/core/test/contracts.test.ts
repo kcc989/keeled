@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test';
 import { tool, type InferUITools, type UIMessage } from 'ai';
 import { z } from 'zod';
 import { createTestAgent as createAgent } from './fixtures.ts';
-import { reduceState } from '../src/state.ts';
 import { agentTool } from '../src/tool.ts';
 import type { AgentDataParts, AgentMetadata } from '../src/types.ts';
 import type { AgentContext, InferAgentUITools } from '../src/tool.ts';
@@ -26,7 +25,9 @@ const sdkDouble = tool({
 });
 
 const tools = { agentSearch, sdkDouble };
+
 type UITools = InferAgentUITools<typeof tools>;
+
 type Message = UIMessage<AgentMetadata, AgentDataParts, UITools>;
 
 describe('UI tool type projection', () => {
@@ -49,6 +50,7 @@ describe('UI tool type projection', () => {
     expect(sdkOutput.doubled).toBe(4);
 
     type SdkProjection = InferUITools<{ sdkDouble: typeof sdkDouble }>;
+
     const shared: SdkProjection['sdkDouble'] = sdkInput && { input: sdkInput, output: sdkOutput };
     expect(shared.output.doubled).toBe(4);
   });
@@ -64,12 +66,14 @@ describe('execution context', () => {
       inputSchema: z.object({}),
       risk: 'read',
       resolveInput: (context: AgentContext) => {
-        expect(typeof context.generateText).toBe('function');
+        expect(context.generateText).toBeFunction();
         expect(context.request).toContain('Inspect');
+
         return {};
       },
       execute: (_input, context) => {
         agentKeys = Object.keys(context).sort();
+
         return { ok: true };
       },
     });
@@ -79,6 +83,7 @@ describe('execution context', () => {
       inputSchema: z.object({}),
       execute: async (_input, options) => {
         sdkKeys = Object.keys(options).sort();
+
         return { ok: true };
       },
     });
@@ -91,7 +96,6 @@ describe('execution context', () => {
           { type: 'tool', tool: 'plain' },
           { type: 'respond', outcome: 'completed' },
         ],
-
       }),
       model: stubModel({ text: 'Done.', objects: [{}] }),
       tools: { inspected, plain },
@@ -129,16 +133,17 @@ describe('terminal paths', () => {
 
   test('every non-cancelled stop reason produces text', async () => {
     const outcomes = ['completed', 'needs_input', 'blocked'] as const;
+
     for (const outcome of outcomes) {
       const agent = createAgent({
         instructions: 'Answer the question.',
         controller: scriptedController({
           decisions: [{ type: 'respond', outcome }],
-
         }),
         model,
         tools: { search: searchTool() },
       });
+
       const result = await agent.run({ messages: [userMessage('Go.')] });
       expect(result.stopReason).toBe(outcome);
       expect(result.text.length).toBeGreaterThan(0);
@@ -150,7 +155,6 @@ describe('terminal paths', () => {
       instructions: 'Answer the question.',
       controller: scriptedController({
         decisions: [{ type: 'respond', outcome: 'completed' }],
-
       }),
       model,
       tools: { search: searchTool() },

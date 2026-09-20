@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { agentTool, type AgentTool } from './tool.ts';
 import { callHistory } from './projection.ts';
+import { jsonNumber, jsonObject, type JsonValue } from './json.ts';
 
 const rawEvidenceSchema = z.object({
   ref: z.string().describe('The reference of an earlier tool result, as shown in the call history.'),
@@ -21,7 +22,13 @@ const rawEvidenceSchema = z.object({
 });
 
 type EvidenceInput = z.infer<typeof rawEvidenceSchema>;
-const evidenceInputSchema = rawEvidenceSchema.transform((input): EvidenceInput => ({ ...input, page: input.page ?? 1, pageSize: input.pageSize ?? 10, order: input.order ?? 'asc' }));
+
+const evidenceInputSchema = rawEvidenceSchema.transform((input): EvidenceInput => ({
+  ...input,
+  page: input.page ?? 1,
+  pageSize: input.pageSize ?? 10,
+  order: input.order ?? 'asc',
+}));
 
 export interface EvidencePage {
   ref: string;
@@ -33,7 +40,7 @@ export interface EvidencePage {
   sortBy?: string;
   order?: 'asc' | 'desc';
   /** Complete records with their position in the original list and, when sorted, their key. */
-  records: { index: number; sortValue?: number | null; record: unknown }[];
+  records: { index: number; sortValue?: number | null; record: JsonValue }[];
 }
 
 /**
@@ -52,25 +59,31 @@ export function evidenceTool(): AgentTool<EvidenceInput, EvidencePage> {
     repeat: 'reuse',
     execute: (input, context): EvidencePage => {
       const call = callHistory(context.conversation, context.state.observations).find(
-        record => record.ref === input.ref,
+        (record) => record.ref === input.ref,
       );
+
       if (call === undefined) throw new Error(`No tool result has the reference "${input.ref}".`);
+
       if (call.outcome !== 'result') throw new Error(`The call ${input.ref} failed, so it has no result to read.`);
 
       const list = input.path === undefined ? call.result : at(call.result, input.path);
+
       if (!Array.isArray(list)) {
         throw new Error(`${input.path === undefined ? 'That result' : `"${input.path}"`} is not a list.`);
       }
 
       let entries: EvidencePage['records'] = list.map((record, index) => ({ index, record }));
       const order = input.order ?? 'asc';
+
       if (input.sortBy !== undefined) {
         const path = input.sortBy;
         entries = entries
-          .map(entry => ({ ...entry, sortValue: numberAt(entry.record, path.split('.')) }))
+          .map((entry) => ({ ...entry, sortValue: numberAt(entry.record, path.split('.')) }))
           .sort((left, right) => {
             if (left.sortValue === null || left.sortValue === undefined) return 1;
+
             if (right.sortValue === null || right.sortValue === undefined) return -1;
+
             return order === 'asc' ? left.sortValue - right.sortValue : right.sortValue - left.sortValue;
           });
       }
@@ -78,43 +91,65 @@ export function evidenceTool(): AgentTool<EvidenceInput, EvidencePage> {
       const pageSize = input.pageSize ?? 10;
       const pages = Math.max(1, Math.ceil(entries.length / pageSize));
       const page = Math.min(input.page ?? 1, pages);
-      return {
+
+      const result: EvidencePage = {
         ref: input.ref,
-        ...(input.path === undefined ? {} : { path: input.path }),
         total: entries.length,
         page,
         pages,
         pageSize,
-        ...(input.sortBy === undefined ? {} : { sortBy: input.sortBy, order }),
         records: entries.slice((page - 1) * pageSize, page * pageSize),
       };
+
+      if (input.path !== undefined) result.path = input.path;
+
+      if (input.sortBy !== undefined) {
+        result.sortBy = input.sortBy;
+        result.order = order;
+      }
+
+      return result;
     },
   });
 }
 
-function at(value: unknown, path: string): unknown {
-  let current = value;
+function at(value: JsonValue, path: string): JsonValue | undefined {
+  let current: JsonValue | undefined = value;
+
   for (const segment of path.split('.')) {
-    if (current === null || typeof current !== 'object') return undefined;
-    current = (current as Record<string, unknown>)[segment];
+    if (current === undefined) return undefined;
+    const object = jsonObject(current);
+
+    if (object === undefined) return undefined;
+    current = object[segment];
   }
+
   return current;
 }
 
 /** The number at a path, summing across a "[]" segment; null when any part is missing. */
-function numberAt(value: unknown, segments: readonly string[]): number | null {
-  if (segments.length === 0) return typeof value === 'number' && Number.isFinite(value) ? value : null;
+function numberAt(value: JsonValue, segments: readonly string[]): number | null {
+  if (segments.length === 0) return jsonNumber(value) ?? null;
   const [head, ...rest] = segments;
+
   if (head === '[]') {
     if (!Array.isArray(value) || value.length === 0) return null;
     let total = 0;
+
     for (const element of value) {
       const part = numberAt(element, rest);
+
       if (part === null) return null;
       total += part;
     }
+
     return total;
   }
-  if (value === null || typeof value !== 'object') return null;
-  return numberAt((value as Record<string, unknown>)[head!], rest);
+
+  const object = jsonObject(value);
+
+  if (object === undefined) return null;
+  const child = object[head!];
+
+  return child === undefined ? null : numberAt(child, rest);
 }

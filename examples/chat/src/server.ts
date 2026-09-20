@@ -7,24 +7,23 @@ import { jev } from '@keeled/jev';
 import { Repo } from './repo.ts';
 import { buildTools } from './tools.ts';
 
-const repo = new Repo([
-  { path: 'src/pricing.ts', contents: 'export function priceLabel(cents: number) {}\n' },
-]);
+const repo = new Repo([{ path: 'src/pricing.ts', contents: 'export function priceLabel(cents: number) {}\n' }]);
 
 const agent = createAgent({
   instructions: 'Complete the requested change and verify the result.',
   controller: jev(),
   model: process.env['KEELED_MODEL'] ?? 'anthropic/claude-sonnet-4-5',
   tools: buildTools(repo),
-
 });
 
 Bun.serve({
   port: 3000,
   async fetch(request) {
     if (request.method !== 'POST') return new Response('POST /', { status: 405 });
+    // SAFETY: the adjacent validation or framework contract establishes the asserted type.
     const body = (await request.json()) as { messages: AgentMessage[] };
     const stream = agent.stream({ messages: body.messages, abortSignal: request.signal });
+
     return stream.toUIMessageStreamResponse();
   },
 });

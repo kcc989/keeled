@@ -12,9 +12,14 @@ import {
   type ControllerContext,
   type ControllerDecision,
   type NextAction,
+  type ObservedArgumentJudge,
+  type ObservedArgumentQuery,
+  type ObservedResolutionTrace,
   type PendingAction,
   type StopReason,
   type UsageTotals,
+  type JsonValue,
+  isJsonValue,
 } from '@keeled/core';
 import { bridgeTools, respondWith, type ToolCallRequest, type ToolSpec } from './tools.ts';
 
@@ -26,7 +31,7 @@ export interface DecisionLog {
 }
 
 export interface TraceEntry {
-  kind: 'control' | 'authorize' | 'generate';
+  kind: 'control' | 'authorize' | 'generate' | 'observed-arguments';
   ms: number;
   detail?: unknown;
 }
@@ -43,6 +48,7 @@ export type BridgeEvent =
     };
 
 type WithoutLogs<E> = E extends unknown ? Omit<E, 'decisions' | 'trace'> : never;
+
 type PendingEvent = WithoutLogs<BridgeEvent>;
 
 export interface ToolResult {
@@ -63,6 +69,8 @@ export interface SessionOptions {
   argumentsModel?: LanguageModel;
   /** Model used for state-changing tool arguments. Defaults to `argumentsModel`. */
   writeArgumentsModel?: LanguageModel;
+  /** Optional semantic adapter for turn-local, evidence-backed read arguments. */
+  observedArgumentJudge?: ObservedArgumentJudge;
   policy?: AgentPolicy;
 }
 
@@ -79,33 +87,67 @@ export class Session {
   #messages: AgentMessage[];
   #decisions: DecisionLog[] = [];
   #trace: TraceEntry[] = [];
-  #pending: { id: string; resolve(value: unknown): void; reject(error: unknown): void } | undefined;
-  #waiter: { resolve(event: BridgeEvent): void; reject(error: unknown): void } | undefined;
+  #pending: { id: string; resolve(value: JsonValue): void; reject(error: Error): void } | undefined;
+  #waiter: { resolve(event: BridgeEvent): void; reject(error: Error): void } | undefined;
   #running = false;
 
   constructor(options: SessionOptions) {
-    this.#messages = (options.history ?? []).map(entry => textMessage(entry.role, entry.text));
+    this.#messages = (options.history ?? []).map((entry) => textMessage(entry.role, entry.text));
     const trace = (entry: TraceEntry) => this.#trace.push(entry);
+    const judgmentMs = new WeakMap<ObservedArgumentQuery, number>();
+
+    const observedArgumentJudge: ObservedArgumentJudge | undefined =
+      options.observedArgumentJudge === undefined
+        ? undefined
+        : async (query, context) => {
+            const started = performance.now();
+            const result = await options.observedArgumentJudge!(query, context);
+            judgmentMs.set(query, Math.round(performance.now() - started));
+
+            return result;
+          };
+
+    const observedResolution = (resolution: ObservedResolutionTrace) =>
+      trace({
+        kind: 'observed-arguments',
+        ms: judgmentMs.get(resolution.query) ?? 0,
+        detail: {
+          tool: resolution.query.tool.name,
+          argument: resolution.query.argument.name,
+          evidenceVersion: resolution.evidenceVersion,
+          cacheHit: resolution.cacheHit,
+          sourcePath: resolution.sourcePath ?? null,
+          sourceConfidence: resolution.sourceConfidence ?? null,
+          selectedOptions: resolution.selectedOptions.map((option) => ({
+            id: option.id,
+            value: option.value,
+            path: option.path,
+            source: option.source,
+          })),
+          returnedOption: resolution.returnedOption?.id ?? null,
+        },
+      });
+
     this.#agent = createAgent({
       instructions: options.instructions,
-      taskTracker: options.trackTasks === false ? undefined : modelTaskTracker({ extractionModel: options.argumentsModel }),
-      controller: observe(options.controller, trace, decision => this.#decisions.push(logOf(decision))),
+      taskTracker:
+        options.trackTasks === false ? undefined : modelTaskTracker({ extractionModel: options.argumentsModel }),
+      controller: observe(options.controller, trace, (decision) => this.#decisions.push(logOf(decision))),
       model: options.model,
-      onGeneration: entry => trace({ kind: 'generate', ms: entry.ms, detail: entry }),
+      onGeneration: (entry) => trace({ kind: 'generate', ms: entry.ms, detail: entry }),
       tools: {
         ...bridgeTools(
           options.tools,
           (call, signal) => this.#requestTool(call, signal),
           options.argumentsModel === undefined ? undefined : options.argumentsModel,
           options.writeArgumentsModel === undefined ? undefined : options.writeArgumentsModel,
+          observedArgumentJudge,
+          observedResolution,
         ),
         evidence: evidenceTool(),
         arithmetic: evidenceCalculationTool(),
       },
-      respond: respondWith(
-        options.tools,
-        options.argumentsModel === undefined ? undefined : options.argumentsModel,
-      ),
+      respond: respondWith(options.tools, options.argumentsModel === undefined ? undefined : options.argumentsModel),
       policy: options.policy,
     });
   }
@@ -122,30 +164,40 @@ export class Session {
     const next = this.#nextEvent();
 
     this.#agent.run({ messages: this.#messages, abortSignal: this.#abort.signal }).then(
-      result => {
+      (result) => {
         this.#messages = result.messages;
         this.#running = false;
-        this.#emit({ type: 'message', text: result.text.trim() || `The turn ended with status ${result.stopReason}; no response text was produced.`, stopReason: result.stopReason, usage: result.usage });
+        this.#emit({
+          type: 'message',
+          text: result.text.trim() || `The turn ended with status ${result.stopReason}; no response text was produced.`,
+          stopReason: result.stopReason,
+          usage: result.usage,
+        });
       },
-      error => {
+      (error) => {
         this.#running = false;
         const waiter = this.#waiter;
         this.#waiter = undefined;
         waiter?.reject(error);
       },
     );
+
     return next;
   }
 
   sendToolResult(result: ToolResult): Promise<BridgeEvent> {
     const pending = this.#pending;
+
     if (pending === undefined || pending.id !== result.id) {
       throw new SessionConflictError(`No pending tool call with id "${result.id}".`);
     }
+
     this.#pending = undefined;
     const next = this.#nextEvent();
+
     if (result.error === true) pending.reject(new Error(result.content));
     else pending.resolve(parseContent(result.content));
+
     return next;
   }
 
@@ -153,9 +205,11 @@ export class Session {
     this.#abort.abort();
   }
 
-  #requestTool(call: ToolCallRequest, signal: AbortSignal): Promise<unknown> {
+  #requestTool(call: ToolCallRequest, signal: AbortSignal): Promise<JsonValue> {
     return new Promise((resolve, reject) => {
-      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      signal.addEventListener('abort', () => reject(new Error('Tool request aborted.', { cause: signal.reason })), {
+        once: true,
+      });
       this.#pending = { id: call.id, resolve, reject };
       this.#emit({ type: 'tool_call', ...call });
     });
@@ -174,6 +228,7 @@ export class Session {
     this.#waiter = undefined;
     this.#decisions = [];
     this.#trace = [];
+    // SAFETY: this is the single assembly point that adds both required log arrays to every pending event.
     waiter?.resolve({ ...event, decisions, trace } as BridgeEvent);
   }
 }
@@ -183,7 +238,7 @@ function observe(
   trace: (entry: TraceEntry) => void,
   onDecision: (decision: ControllerDecision) => void,
 ): Controller {
-  return {
+  const observed: Controller = {
     name: controller.name,
     async control(context) {
       const started = performance.now();
@@ -194,29 +249,31 @@ function observe(
         detail: { action: result.action },
       });
       onDecision(result);
+
       return result;
     },
-    ...(controller.authorize === undefined
-      ? {}
-      : {
-          async authorize(context: ControllerContext, action: PendingAction) {
-            const started = performance.now();
-            const answer = await controller.authorize!(context, action);
-            trace({
-              kind: 'authorize',
-              ms: Math.round(performance.now() - started),
-              detail: {
-                tool: action.tool,
-                input: action.input,
-                permitted: answer.permitted,
-                needsVerification: answer.needsVerification,
-                confirmed: answer.confirmed,
-              },
-            });
-            return answer;
-          },
-        }),
   };
+
+  if (controller.authorize !== undefined)
+    observed.authorize = async (context: ControllerContext, action: PendingAction) => {
+      const started = performance.now();
+      const answer = await controller.authorize!(context, action);
+      trace({
+        kind: 'authorize',
+        ms: Math.round(performance.now() - started),
+        detail: {
+          tool: action.tool,
+          input: action.input,
+          permitted: answer.permitted,
+          needsVerification: answer.needsVerification,
+          confirmed: answer.confirmed,
+        },
+      });
+
+      return answer;
+    };
+
+  return observed;
 }
 
 function logOf(decision: ControllerDecision): DecisionLog {
@@ -232,9 +289,13 @@ function textMessage(role: 'user' | 'assistant', text: string): AgentMessage {
   return { id: crypto.randomUUID(), role, parts: [{ type: 'text', text }] };
 }
 
-function parseContent(content: string): unknown {
+function parseContent(content: string): JsonValue {
   try {
-    return JSON.parse(content);
+    const parsed = JSON.parse(content);
+
+    if (!isJsonValue(parsed)) throw new SessionConflictError('Tool result is not JSON-serializable.');
+
+    return parsed;
   } catch {
     return content;
   }

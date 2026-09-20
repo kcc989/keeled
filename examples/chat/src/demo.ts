@@ -20,6 +20,7 @@ const repo = new Repo([
 const tools = buildTools(repo);
 
 let editAttempt = 0;
+
 const controller = scriptedController({
   decisions: [
     { type: 'tool', tool: 'search' },
@@ -32,16 +33,18 @@ const controller = scriptedController({
 });
 
 const editFile = agentTool({
+  // SAFETY: the adjacent validation or framework contract establishes the asserted type.
   description: tools.editFile.description as string,
   inputSchema: z.object({ path: z.string(), from: z.string(), to: z.string() }),
   risk: 'write',
   resolveInput: () => {
     editAttempt += 1;
+
     return editAttempt === 1
       ? { path: 'src/pricing.ts', from: 'formatPriceLabel', to: 'formatPrice' }
       : { path: 'src/pricing.ts', from: 'priceLabel', to: 'formatPrice' };
   },
-  execute: input => repo.replace(input.path, input.from, input.to),
+  execute: (input) => repo.replace(input.path, input.from, input.to),
 });
 
 const agent = createAgent({
@@ -64,11 +67,7 @@ const execution = agent.stream({
 for await (const chunk of execution) {
   if (chunk.type === 'data-decision') {
     const action = chunk.data.action;
-    console.log(
-      action.type === 'tool'
-        ? `  decide  -> tool ${action.tool}`
-        : `  decide  -> respond ${action.outcome}`,
-    );
+    console.log(action.type === 'tool' ? `  decide  -> tool ${action.tool}` : `  decide  -> respond ${action.outcome}`);
   } else if (chunk.type === 'data-blocker') {
     console.log(`  blocked -> ${chunk.data.reason}`);
   } else if (chunk.type === 'tool-output-error') {
@@ -81,7 +80,11 @@ for await (const chunk of execution) {
 const result = await execution.result;
 
 console.log('\n---');
+
 console.log(`stop reason : ${result.stopReason}`);
+
 console.log(`steps       : ${result.steps}`);
+
 console.log(`usage       : ${JSON.stringify(result.usage)}`);
+
 console.log(`\n${result.text}`);

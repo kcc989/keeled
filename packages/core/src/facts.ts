@@ -1,4 +1,5 @@
 import type { CallRecord } from './projection.ts';
+import { jsonNumber, jsonObject, jsonString, type JsonObject, type JsonValue } from './json.ts';
 
 /**
  * A value the conversation has already established, which a controller can select as a
@@ -29,18 +30,23 @@ const maxLabel = 160;
 export function factIndex(history: readonly CallRecord[], statements: readonly UserStatement[] = []): Fact[] {
   const facts = new Map<string, Fact>();
   const specificity = new Map<string, number>();
+
   // A label from the record a value belongs to says more than one from a list that merely
   // names it; within a kind, the fuller label wins.
   const add = (type: string, value: string | number, label: string, source: string, fromRecord: boolean) => {
     const key = JSON.stringify([type, value]);
     const rank = (fromRecord ? 1_000_000 : 0) + label.length;
     const existing = facts.get(key);
+
     if (existing === undefined) {
       facts.set(key, { type, value, label, sources: [source] });
       specificity.set(key, rank);
+
       return;
     }
+
     if (!existing.sources.includes(source)) existing.sources.push(source);
+
     if (rank > specificity.get(key)!) {
       existing.label = label;
       specificity.set(key, rank);
@@ -51,8 +57,9 @@ export function factIndex(history: readonly CallRecord[], statements: readonly U
     if (call.outcome !== 'result') continue;
     walk(call.result, [], (key, value, record, ancestors) => {
       // An `id` is named by the collection it belongs to; a map keyed by ids is skipped over.
-      const collection = ancestors.findLast(ancestor => ancestor !== String(value));
+      const collection = ancestors.findLast((ancestor) => ancestor !== String(value));
       const type = factType(key === 'id' && collection !== undefined ? collection : key);
+
       if (type.length === 0) return;
       const described = record === undefined ? '' : describe(record, key);
       const label = described || `one of ${ancestors.at(-1) ?? key} returned by ${call.tool}`;
@@ -74,10 +81,18 @@ export function factIndex(history: readonly CallRecord[], statements: readonly U
 export function candidatesFor(parameter: string, facts: readonly Fact[]): Fact[] {
   const wanted = factType(parameter);
   const head = wanted.split('_')[0];
-  const exact = facts.filter(fact => fact.type === wanted);
-  const related = facts.filter(fact => fact.type !== wanted && fact.type !== 'mentioned' && fact.type.split('_')[0] === head);
+  const exact = facts.filter((fact) => fact.type === wanted);
+
+  const related = facts.filter(
+    (fact) => fact.type !== wanted && fact.type !== 'mentioned' && fact.type.split('_')[0] === head,
+  );
+
   const typed = [...exact, ...related];
-  const mentioned = facts.filter(fact => fact.type === 'mentioned' && !typed.some(other => other.value === fact.value));
+
+  const mentioned = facts.filter(
+    (fact) => fact.type === 'mentioned' && !typed.some((other) => other.value === fact.value),
+  );
+
   return [...typed, ...mentioned];
 }
 
@@ -87,20 +102,23 @@ export function factType(key: string): string {
     .toLowerCase()
     .replace(/\[\d*\]/g, '')
     .split(/[^a-z0-9]+/)
-    .filter(token => token.length > 0);
+    .filter((token) => token.length > 0);
+
   while (tokens.length > 1 && (tokens.at(-1) === 'id' || tokens.at(-1) === 'ids')) tokens.pop();
   const last = tokens.at(-1);
+
   if (last !== undefined && last.length > 3) {
     if (last.endsWith('ies')) tokens[tokens.length - 1] = `${last.slice(0, -3)}y`;
     else if (last.endsWith('s') && !/(ss|us|is)$/.test(last)) tokens[tokens.length - 1] = last.slice(0, -1);
   }
+
   return tokens.join('_');
 }
 
 type Visit = (
   key: string,
   value: string | number,
-  record: Record<string, unknown> | undefined,
+  record: JsonObject | undefined,
   ancestors: readonly string[],
 ) => void;
 
@@ -108,18 +126,22 @@ type Visit = (
  * Visits scalar leaves with the key they sit under, the record that holds them, and the
  * keys of the containers above them. Scalars in a list take the list's key.
  */
-function walk(value: unknown, ancestors: readonly string[], visit: Visit): void {
+function walk(value: JsonValue, ancestors: readonly string[], visit: Visit): void {
   if (Array.isArray(value)) {
     const key = ancestors.at(-1);
+
     for (const item of value) {
       if (isScalar(item)) {
         if (key !== undefined) visit(key, item, undefined, ancestors);
       } else walk(item, ancestors, visit);
     }
+
     return;
   }
-  if (value !== null && typeof value === 'object') {
-    const record = value as Record<string, unknown>;
+
+  const record = jsonObject(value);
+
+  if (record !== undefined) {
     for (const [field, inner] of Object.entries(record)) {
       if (isScalar(inner)) visit(field, inner, record, ancestors);
       else walk(inner, [...ancestors, field], visit);
@@ -127,17 +149,22 @@ function walk(value: unknown, ancestors: readonly string[], visit: Visit): void 
   }
 }
 
-function isScalar(value: unknown): value is string | number {
-  return (typeof value === 'string' && value.length > 0) || (typeof value === 'number' && Number.isFinite(value));
+function isScalar(value: JsonValue): value is string | number {
+  const text = jsonString(value);
+
+  return (text !== undefined && text.length > 0) || jsonNumber(value) !== undefined;
 }
 
-function describe(record: Record<string, unknown>, except: string): string {
+function describe(record: JsonObject, except: string): string {
   const parts: string[] = [];
+
   for (const [field, inner] of Object.entries(record)) {
     if (field === except || !isScalar(inner)) continue;
     parts.push(`${field}=${inner}`);
   }
+
   const text = parts.join(', ');
+
   return text.length <= maxLabel ? text : `${text.slice(0, maxLabel)}…`;
 }
 
@@ -151,8 +178,10 @@ const mentionPatterns = [
 
 function mentions(text: string): string[] {
   const found = new Set<string>();
+
   for (const pattern of mentionPatterns) {
     for (const match of text.matchAll(pattern)) found.add(match[0]);
   }
+
   return [...found];
 }

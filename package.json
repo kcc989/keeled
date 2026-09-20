@@ -1,21 +1,29 @@
 {
   "name": "keeled",
   "private": true,
-  "type": "module",
   "workspaces": [
     "packages/*",
     "examples/*"
   ],
+  "type": "module",
   "scripts": {
+    "lint": "oxlint .",
+    "lint:fix": "oxlint . --fix",
+    "format": "oxfmt .",
+    "format:check": "oxfmt . --check",
+    "quality": "bun run lint && bun run format:check",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bun test",
     "demo": "bun run examples/chat/src/demo.ts",
-    "check": "bun run typecheck && bun test",
+    "check": "bun run quality && bun run typecheck && bun test",
     "tau3": "bun run examples/tau-bridge/src/run.ts",
     "microbench": "bun run examples/tau-bridge/src/microbench/run.ts"
   },
   "devDependencies": {
+    "@oxlint/plugins": "1.83.0",
     "@types/bun": "^1.3.0",
+    "oxfmt": "0.68.0",
+    "oxlint": "1.83.0",
     "typescript": "^5.9.2"
   }
 }

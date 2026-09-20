@@ -4,12 +4,12 @@ An agent harness with Jev at the helm.
 
 Action selection is separate from generation and execution.
 
-| Component | Responsibility |
-| --- | --- |
-| Jev | In one `control()` call, selects a tool or a reply. |
-| LLMs | Generate tool input and responses. |
-| Tools | Do work and return evidence. |
-| Runtime | Runs the loop, applies policy, persists results, and answers the user. |
+| Component | Responsibility                                                         |
+| --------- | ---------------------------------------------------------------------- |
+| Jev       | In one `control()` call, selects a tool or a reply.                    |
+| LLMs      | Generate tool input and responses.                                     |
+| Tools     | Do work and return evidence.                                           |
+| Runtime   | Runs the loop, applies policy, persists results, and answers the user. |
 
 Jev selects actions from the conversation and tool results. The runtime resolves arguments,
 validates and authorizes the selected call, executes it, and returns its result to Jev.
@@ -18,20 +18,34 @@ The public interface uses promises and AI SDK types.
 
 ## Packages
 
-| Package | Contents |
-| --- | --- |
-| `@keeled/core` | `agentTool`, `createAgent`, the execution loop, state, messages. |
-| `@keeled/core/testing` | A scripted controller and a stub model for offline tests. |
-| `@keeled/jev` | The Jev controller, built on `@typesafe-ai/sdk`. |
-| `examples/chat` | An offline demonstration, a live script, and an HTTP route. |
+| Package                | Contents                                                         |
+| ---------------------- | ---------------------------------------------------------------- |
+| `@keeled/core`         | `agentTool`, `createAgent`, the execution loop, state, messages. |
+| `@keeled/core/testing` | A scripted controller and a stub model for offline tests.        |
+| `@keeled/jev`          | The Jev controller, built on `@typesafe-ai/sdk`.                 |
+| `examples/chat`        | An offline demonstration, a live script, and an HTTP route.      |
 
 ## Quick start
 
 ```sh
 bun install
 bun run demo       # offline: no API keys
-bun run check      # typecheck and tests
+bun run check      # lint, format check, typecheck, and tests
 ```
+
+## Code quality
+
+```sh
+bun run lint          # Oxlint with the vendored anti-slop rules
+bun run lint:fix      # apply reviewed safe fixes
+bun run format        # format with Oxfmt
+bun run format:check  # check formatting without writing
+bun run quality       # run lint and the format check
+```
+
+Anti-slop is vendored at `tools/oxlint/anti-slop`. Its `UPSTREAM.md` records the exact
+source revision. Oxlint and `@oxlint/plugins` are pinned to the same version so their plugin
+APIs move together.
 
 ## Usage
 
@@ -68,19 +82,19 @@ const editFile = agentTool({
   inputSchema: z.object({ path: z.string(), from: z.string(), to: z.string() }),
   outputSchema: EditResultSchema,
   risk: 'write',
-  resolveInput: context => buildEditInput(context),
+  resolveInput: (context) => buildEditInput(context),
   execute: (input, context) => applyEdit(input, context.abortSignal),
 });
 ```
 
-| Field | Behavior |
-| --- | --- |
-| `available(context)` | Excludes the tool from selection when false. |
-| `candidates(context)` | Optional complete read-call inputs, each with a description and source references. Jev can select one without generating arguments. |
-| `resolveInput(context)` | Produces the typed input. Without it, the runtime generates input from the schema. |
-| `risk` | `read`, `write`, `destructive`, or, when unspecified, `unknown`. |
-| `repeat` | `allow` (default) runs every call. `reuse` declares that a result stays valid until a state-changing call succeeds, so an identical repeat before then is declined. `poll` exempts repetition from progress checks for `pollTimeoutMs` (default 60 seconds). Never use `reuse` for polling or data that changes outside the agent. |
-| `model` | Overrides default input generation. Custom callbacks pass their model to `context.generateObject` or `context.generateText`. |
+| Field                   | Behavior                                                                                                                                                                                                                                                                                                                           |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `available(context)`    | Excludes the tool from selection when false.                                                                                                                                                                                                                                                                                       |
+| `candidates(context)`   | Optional complete read-call inputs, each with a description and source references. Jev can select one without generating arguments.                                                                                                                                                                                                |
+| `resolveInput(context)` | Produces the typed input. Without it, the runtime generates input from the schema.                                                                                                                                                                                                                                                 |
+| `risk`                  | `read`, `write`, `destructive`, or, when unspecified, `unknown`.                                                                                                                                                                                                                                                                   |
+| `repeat`                | `allow` (default) runs every call. `reuse` declares that a result stays valid until a state-changing call succeeds, so an identical repeat before then is declined. `poll` exempts repetition from progress checks for `pollTimeoutMs` (default 60 seconds). Never use `reuse` for polling or data that changes outside the agent. |
+| `model`                 | Overrides default input generation. Custom callbacks pass their model to `context.generateObject` or `context.generateText`.                                                                                                                                                                                                       |
 
 Agent callbacks receive managed generation directly: `context.generateText(...)` and
 `context.generateObject(...)`. Those calls carry usage accounting, timeouts, and cancellation.
@@ -128,15 +142,15 @@ the turn as `blocked`. A `poll` tool is exempt until its time limit passes.
 
 Every declined attempt is recorded with a kind and what would resolve it:
 
-| Kind | Resolution |
-| --- | --- |
+| Kind                 | Resolution                                                                                |
+| -------------------- | ----------------------------------------------------------------------------------------- |
 | `needs_confirmation` | Ask the user. The tool is withdrawn for the rest of the turn; other tools stay available. |
-| `missing_evidence` | Obtain the named evidence by a lookup or from the user. |
-| `policy_denied` | Do not retry; explain, or choose a permitted action. |
-| `invalid_input` | Obtain valid input. |
-| `duplicate` | Use the result already in the call history. |
-| `unavailable` | Choose an available tool. |
-| `no_progress` | Change course, or respond with what is known. |
+| `missing_evidence`   | Obtain the named evidence by a lookup or from the user.                                   |
+| `policy_denied`      | Do not retry; explain, or choose a permitted action.                                      |
+| `invalid_input`      | Obtain valid input.                                                                       |
+| `duplicate`          | Use the result already in the call history.                                               |
+| `unavailable`        | Choose an available tool.                                                                 |
+| `no_progress`        | Change course, or respond with what is known.                                             |
 
 ### Selection and input
 
@@ -248,7 +262,6 @@ explicit `argumentsModel` / tool model / agent model order, and durable crash re
 Measure task success, latency, and total cost against an LLM-controlled loop.
 Treat any performance benefit as a hypothesis until it is measured.
 
-
 ## Application trust and durable execution
 
 Tools use the generic instruction, evidence, and confirmation checks. There is no host
@@ -286,14 +299,12 @@ before storage cannot be recovered.
 Such callbacks may continue outside the loop; uncertain writes remain quarantined.
 Timeouts are errors, not user cancellation. Every terminal response has nonempty text.
 
-
 `schemaReadCandidates(tool, catalog)` provides generic ready reads from observed records.
 It copies exact schema property names from one object and validates the complete input;
 it does not infer aliases or relationships between records. The bridge uses this core
 provider for every read tool without domain-specific tool mappings. Unsupported schemas
 or incomplete records use normal argument resolution. Matching fields propose a call;
 they do not prove that the call is appropriate or authorized.
-
 
 Generation diagnostics are available through `onGeneration`: purpose, duration, status,
 input/output/reasoning tokens, and errors. Built-in purposes distinguish task extraction,
@@ -303,7 +314,6 @@ do not change execution if the observer throws. The bridge saves these in each t
 extraction while keeping the default model for completion verification. The bridge uses
 its existing fast argument model for this extraction. Evidence reads normalize page defaults
 and reject identical repeats within a turn; different pages remain available.
-
 
 ## Focused argument benchmark
 

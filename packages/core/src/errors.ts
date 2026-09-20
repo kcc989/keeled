@@ -28,19 +28,26 @@ export class AgentToolRuntimeError extends HarnessError {
   }
 }
 
-export function isAbortError(error: unknown): boolean {
-  if (error instanceof DOMException && error.name === 'AbortError') return true;
-  return error instanceof Error && (error.name === 'AbortError');
+export function isAbortError(cause: unknown): boolean {
+  if (cause instanceof DOMException && cause.name === 'AbortError') return true;
+
+  return cause instanceof Error && cause.name === 'AbortError';
 }
 
-export function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === 'string') return error;
+export function errorMessage(cause: unknown): string {
+  if (cause instanceof Error) return cause.message;
+
+  if (isString(cause)) return cause;
+
   try {
-    return JSON.stringify(error);
+    return JSON.stringify(cause);
   } catch {
-    return String(error);
+    return String(cause);
   }
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === 'string';
 }
 
 /**

@@ -1,6 +1,7 @@
 import { jsonSchema, type LanguageModel } from 'ai';
 import {
   MissingInformation,
+  observedReadResolver,
   schemaReadCandidates,
   agentTool,
   callHistory,
@@ -10,6 +11,12 @@ import {
   type AgentMessage,
   type AgentToolSet,
   type Observation,
+  type ObservedArgumentJudge,
+  type ObservedResolutionTrace,
+  type JsonValue,
+  isJsonValue,
+  jsonObject,
+  jsonString,
   type RepeatPolicy,
   type RespondAdapter,
   type Risk,
@@ -33,10 +40,10 @@ export interface ToolSpec {
 export interface ToolCallRequest {
   id: string;
   name: string;
-  arguments: unknown;
+  arguments: JsonValue;
 }
 
-export type ToolCallHandler = (call: ToolCallRequest, signal: AbortSignal) => Promise<unknown>;
+export type ToolCallHandler = (call: ToolCallRequest, signal: AbortSignal) => Promise<JsonValue>;
 
 /**
  * Registers each remote tool as an agent tool. The controller still selects every call and
@@ -47,33 +54,52 @@ export function bridgeTools(
   call: ToolCallHandler,
   argumentsModel?: LanguageModel,
   writeArgumentsModel?: LanguageModel,
+  observedArgumentJudge?: ObservedArgumentJudge,
+  onObservedResolution?: (trace: ObservedResolutionTrace) => void,
 ): AgentToolSet {
   const tools: AgentToolSet = {};
+
   for (const spec of specs) {
     const schema = jsonSchema(spec.parameters);
+
+    const observedResolver =
+      observedArgumentJudge === undefined
+        ? undefined
+        : observedReadResolver(spec, specs, observedArgumentJudge, { onResolution: onObservedResolution });
+
     tools[spec.name] = agentTool({
       description: describe(spec),
       inputSchema: schema,
       risk: spec.risk ?? 'unknown',
       repeat: spec.repeat ?? 'allow',
       candidates: schemaReadCandidates(spec, specs),
-      resolveInput: async context => {
+      resolveInput: async (context) => {
+        const observed = await observedResolver?.(context);
+
+        if (observed !== undefined) return observed;
         const model = spec.risk === 'read' ? argumentsModel : (writeArgumentsModel ?? argumentsModel);
+
         return resolveInput(spec, context, model);
       },
-      execute: (input, options) =>
-        call({ id: options.toolCallId, name: spec.name, arguments: input }, options.abortSignal),
+      execute: (input, options) => {
+        if (!isJsonValue(input)) throw new MissingInformation('Tool input is not JSON-serializable.');
+
+        return call({ id: options.toolCallId, name: spec.name, arguments: input }, options.abortSignal);
+      },
     });
   }
+
   return tools;
 }
 
 /** The description the controller selects on: what the tool does and what it returns. */
 export function describe(spec: ToolSpec): string {
   const returns = spec.returns === undefined ? undefined : summarizeReturns(spec.returns);
+
   if (returns === undefined) return spec.description;
   const base = spec.description.trim();
   const separator = /[.!?]$/.test(base) ? ' ' : '. ';
+
   return `${base}${separator}Returns ${returns.replace(/\.$/, '')}.`;
 }
 
@@ -96,35 +122,53 @@ type SchemaNode = {
  * before the summary is clipped.
  */
 export function summarizeReturns(schema: JsonSchema, max = 400): string | undefined {
+  // SAFETY: the adjacent validation or framework contract establishes the asserted type.
   const root = schema as SchemaNode;
   // Result models wrap the value in a single `returns` field.
   const node = root.properties?.['returns'] ?? root;
   const defs = root.$defs ?? {};
-  let text = shape(node, defs, 0);
+  let text = describeSchema(node, defs, 0);
+
   if (text === 'string' && node.description !== undefined) text = `a string: ${node.description}`;
+
   return text.length <= max ? text : `${text.slice(0, max)}…`;
 }
 
-function shape(node: SchemaNode | undefined, defs: Record<string, SchemaNode>, depth: number): string {
+function describeSchema(node: SchemaNode | undefined, defs: Record<string, SchemaNode>, depth: number): string {
   if (node === undefined) return 'unknown';
-  if (node.$ref !== undefined) return shape(defs[node.$ref.split('/').at(-1) ?? ''], defs, depth);
+
+  if (node.$ref !== undefined) return describeSchema(defs[node.$ref.split('/').at(-1) ?? ''], defs, depth);
+
   if (node.anyOf !== undefined) {
-    const options = node.anyOf.filter(option => option.type !== 'null').map(option => shape(option, defs, depth));
+    const options = node.anyOf
+      .filter((option) => option.type !== 'null')
+      .map((option) => describeSchema(option, defs, depth));
+
     return [...new Set(options)].join(' | ');
   }
-  if (node.enum !== undefined) return node.enum.map(value => JSON.stringify(value)).join(' | ');
+
+  if (node.enum !== undefined) return node.enum.map((value) => JSON.stringify(value)).join(' | ');
+
   if (node.prefixItems !== undefined) {
-    return `[${node.prefixItems.map(item => shape(item, defs, depth + 1)).join(', ')}]`;
+    return `[${node.prefixItems.map((item) => describeSchema(item, defs, depth + 1)).join(', ')}]`;
   }
-  if (node.type === 'array') return `${shape(node.items, defs, depth)}[]`;
+
+  if (node.type === 'array') return `${describeSchema(node.items, defs, depth)}[]`;
+
   if (node.properties !== undefined) {
     if (depth >= 1) return 'object';
-    const fields = Object.entries(node.properties).map(([key, value]) => `${key}: ${shape(value, defs, depth + 1)}`);
+
+    const fields = Object.entries(node.properties).map(
+      ([key, value]) => `${key}: ${describeSchema(value, defs, depth + 1)}`,
+    );
+
     return `{ ${fields.join(', ')} }`;
   }
-  if (typeof node.additionalProperties === 'object') {
-    return `Record<string, ${shape(node.additionalProperties, defs, depth + 1)}>`;
+
+  if (isSchemaNode(node.additionalProperties)) {
+    return `Record<string, ${describeSchema(node.additionalProperties, defs, depth + 1)}>`;
   }
+
   return node.type ?? 'unknown';
 }
 
@@ -134,16 +178,22 @@ async function resolveInput(
   spec: ToolSpec,
   context: AgentContext,
   model: LanguageModel | undefined,
-): Promise<unknown> {
-  const properties = (spec.parameters as { properties?: Record<string, unknown> }).properties;
+): Promise<JsonValue> {
+  const properties = isJsonValue(spec.parameters) ? jsonObject(jsonObject(spec.parameters)?.['properties']) : undefined;
+
   if (properties === undefined || Object.keys(properties).length === 0) return {};
 
   const action = context.action;
-  const earlier = callHistory(context.conversation, context.state.observations).filter(call => call.tool === spec.name);
+
+  const earlier = callHistory(context.conversation, context.state.observations).filter(
+    (call) => call.tool === spec.name,
+  );
+
   const { object } = await context.generateObject<Resolution>({
     model,
     schema: resolutionSchema(spec.parameters),
-    name: spec.name, purpose: 'tool_input',
+    name: spec.name,
+    purpose: 'tool_input',
     description: spec.description,
     system:
       'You produce the input for a single tool call, or report that you cannot. Use only values stated in the ' +
@@ -160,7 +210,12 @@ async function resolveInput(
       earlier.length === 0
         ? `Earlier calls of ${spec.name}: none.`
         : `Earlier calls of ${spec.name}:\n` +
-          earlier.map(call => `- [${call.ref}] input ${JSON.stringify(call.input)} ${call.outcome === 'result' ? 'returned a result' : 'failed'}`).join('\n'),
+          earlier
+            .map(
+              (call) =>
+                `- [${call.ref}] input ${JSON.stringify(call.input)} ${call.outcome === 'result' ? 'returned a result' : 'failed'}`,
+            )
+            .join('\n'),
       ...(action?.awaitingInput === undefined
         ? []
         : [
@@ -172,12 +227,17 @@ async function resolveInput(
   });
 
   if (object.status === 'missing') throw new MissingInformation(object.missing?.trim() || 'unspecified information');
-  return object.arguments ?? {};
+
+  const arguments_ = object.arguments ?? {};
+
+  if (!isJsonValue(arguments_)) throw new MissingInformation('tool input was not JSON-serializable');
+
+  return arguments_;
 }
 
 interface Resolution {
   status: 'ready' | 'missing';
-  arguments?: unknown;
+  arguments?: JsonValue;
   missing?: string;
 }
 
@@ -187,22 +247,28 @@ interface Resolution {
  * references point.
  */
 function resolutionSchema(parameters: JsonSchema) {
-  const { $defs, ...input } = parameters as Record<string, unknown>;
+  const object = isJsonValue(parameters) ? jsonObject(parameters) : undefined;
+  const { $defs, ...input } = object ?? {};
+
+  // SAFETY: the adjacent validation or framework contract establishes the asserted type.
   return jsonSchema<Resolution>({
     type: 'object',
     properties: {
       status: { type: 'string', enum: ['ready', 'missing'] },
       arguments: input,
-      missing: { type: 'string', description: 'When status is "missing": what is needed and where it could come from.' },
+      missing: {
+        type: 'string',
+        description: 'When status is "missing": what is needed and where it could come from.',
+      },
     },
     required: ['status'],
-    ...($defs === undefined ? {} : { $defs }),
+    $defs,
   } as JsonSchema);
 }
 
 function transcript(context: AgentContext): string {
   return context.messages
-    .map(message => `${message.role}: ${typeof message.content === 'string' ? message.content : ''}`)
+    .map((message) => `${message.role}: ${isTextContent(message.content) ? message.content : ''}`)
     .join('\n');
 }
 
@@ -211,11 +277,14 @@ function transcript(context: AgentContext): string {
 // large to show whole appears as a page of complete records with the rest retrievable.
 function callLog(conversation: readonly AgentMessage[], observations: readonly Observation[], limit = 30): string {
   const calls = callHistory(conversation, observations).slice(-limit);
+
   if (calls.length === 0) return 'None.';
+
   return calls
-    .map(call => {
+    .map((call) => {
       const when = call.turn === 'current' ? 'this turn' : 'earlier turn';
       const made = `${call.tool}(${JSON.stringify(call.input)})`;
+
       return call.outcome === 'result'
         ? `- [${call.ref}, ${when}] ${made} returned ${JSON.stringify(presentResult(call.result, call.ref))}`
         : `- [${call.ref}, ${when}] ${made} failed: ${String(call.result)}`;
@@ -224,7 +293,7 @@ function callLog(conversation: readonly AgentMessage[], observations: readonly O
 }
 
 function blockers(records: readonly { reason: string }[]): string {
-  return records.length === 0 ? 'None.' : records.map(record => `- ${record.reason}`).join('\n');
+  return records.length === 0 ? 'None.' : records.map((record) => `- ${record.reason}`).join('\n');
 }
 
 const guidance: Record<StopReason, string> = {
@@ -242,15 +311,17 @@ const guidance: Record<StopReason, string> = {
  * asks for exactly the inputs those tools need.
  */
 export function respondWith(specs: readonly ToolSpec[], draftModel?: LanguageModel): RespondAdapter {
-  const catalog = specs.map(spec => `- ${spec.name}(${inputs(spec)}): ${describe(spec)}`).join('\n');
-  return async context => {
-    const result = await context.generateText({
+  const catalog = specs.map((spec) => `- ${spec.name}(${inputs(spec)}): ${describe(spec)}`).join('\n');
+
+  return async (context) => {
+    const generation = {
       purpose: 'response',
-      ...(draftModel !== undefined ? { model: draftModel } : {}),
+      model: draftModel,
       system: [
         context.instructions,
         'You write the next message to the user. You cannot call tools in this message, but the agent ' +
-          'can call these tools on later turns:\n' + catalog,
+          'can call these tools on later turns:\n' +
+          catalog,
         'Report only what the tool results below support and never claim an action that was not ' +
           'taken. Never tell the user the agent lacks a tool listed above. When information is missing, ' +
           'ask only for what these tools need and cannot look up themselves.',
@@ -262,14 +333,36 @@ export function respondWith(specs: readonly ToolSpec[], draftModel?: LanguageMod
       ].join('\n\n'),
       messages: projectMessages(context.conversation),
       abortSignal: context.abortSignal,
-    });
+    };
+
+    const result = await context.generateText(generation);
+
     return { text: result.text };
   };
 }
 
 function inputs(spec: ToolSpec): string {
-  const schema = spec.parameters as { properties?: Record<string, unknown>; required?: string[] };
-  const names = Object.keys(schema.properties ?? {});
-  const required = new Set(schema.required ?? []);
-  return names.map(name => (required.has(name) ? name : `${name}?`)).join(', ');
+  const schema = isJsonValue(spec.parameters) ? jsonObject(spec.parameters) : undefined;
+  const names = Object.keys(jsonObject(schema?.['properties']) ?? {});
+  const requiredValue = schema?.['required'];
+
+  const required = new Set(
+    Array.isArray(requiredValue)
+      ? requiredValue.flatMap((value) => {
+          const name = jsonString(value);
+
+          return name === undefined ? [] : [name];
+        })
+      : [],
+  );
+
+  return names.map((name) => (required.has(name) ? name : `${name}?`)).join(', ');
+}
+
+function isSchemaNode(value: SchemaNode | boolean | undefined): value is SchemaNode {
+  return typeof value === 'object' && value !== null;
+}
+
+function isTextContent(content: AgentContext['messages'][number]['content']): content is string {
+  return typeof content === 'string';
 }

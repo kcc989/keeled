@@ -2,6 +2,7 @@ import type { ModelMessage } from 'ai';
 import type { AgentMessage, Blocker, ExecutionState, Observation } from './types.ts';
 import type { AwaitingAction } from './controller.ts';
 import { stableHash } from './ids.ts';
+import { jsonObject, jsonString, type JsonObject, type JsonValue } from './json.ts';
 
 /**
  * Explicit projection of conversation history for model calls.
@@ -15,11 +16,13 @@ export function projectMessages(conversation: readonly AgentMessage[]): ModelMes
 
   for (const message of conversation) {
     if (message.role === 'system') continue;
+
     const text = message.parts
       .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
-      .map(part => part.text)
+      .map((part) => part.text)
       .join('')
       .trim();
+
     if (text.length === 0) continue;
     messages.push({ role: message.role === 'user' ? 'user' : 'assistant', content: text });
   }
@@ -30,36 +33,43 @@ export function projectMessages(conversation: readonly AgentMessage[]): ModelMes
 export function latestRequest(conversation: readonly AgentMessage[]): string {
   for (let index = conversation.length - 1; index >= 0; index -= 1) {
     const message = conversation[index];
+
     if (message?.role !== 'user') continue;
+
     const text = message.parts
       .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
-      .map(part => part.text)
+      .map((part) => part.text)
       .join('')
       .trim();
+
     if (text.length > 0) return text;
   }
+
   return '';
 }
 
 export function digestObservations(observations: readonly Observation[], limit = 12): string {
   if (observations.length === 0) return 'No tool evidence yet.';
+
   return observations
     .slice(-limit)
-    .map(observation => {
+    .map((observation) => {
       const scope = observation.tool === undefined ? '' : ` [${observation.tool}]`;
+
       const detail =
         observation.detail === undefined ? '' : ` ${json(presentResult(observation.detail, observation.id))}`;
+
       return `- (${observation.kind})${scope} ${observation.summary}${detail}`;
     })
     .join('\n');
 }
 
-export function digestState(state: Readonly<ExecutionState>): Record<string, unknown> {
+export function digestState(state: Readonly<ExecutionState>): JsonObject {
   return {
     cycle: state.cycle,
     stepsUsed: state.stepsUsed,
     toolCalls: state.toolCalls,
-    blockers: state.blockers.slice(-4).map(blocker => blocker.reason),
+    blockers: state.blockers.slice(-4).map((blocker) => blocker.reason),
   };
 }
 
@@ -69,17 +79,17 @@ export interface CallRecord {
   ref: string;
   turn: 'earlier' | 'current';
   tool: string;
-  input: unknown;
+  input: JsonValue;
   outcome: 'result' | 'error';
-  result: unknown;
+  result: JsonValue;
 }
 
 interface ToolPartLike {
   type: string;
   toolCallId?: string;
   state?: string;
-  input?: unknown;
-  output?: unknown;
+  input?: JsonValue;
+  output?: JsonValue;
   errorText?: string;
 }
 
@@ -89,31 +99,33 @@ interface ToolPartLike {
  * parts supply earlier turns. A part whose call id the observations already hold belongs to
  * the message being written for this turn, so it is not projected again.
  */
-export function callHistory(
-  conversation: readonly AgentMessage[],
-  observations: readonly Observation[],
-): CallRecord[] {
+export function callHistory(conversation: readonly AgentMessage[], observations: readonly Observation[]): CallRecord[] {
   const current = new Set(
-    observations
-      .filter(observation => observation.kind === 'tool-result' || observation.kind === 'tool-error')
-      .map(observation => observation.id),
+    observations.flatMap((observation) =>
+      observation.kind === 'tool-result' || observation.kind === 'tool-error' ? [observation.id] : [],
+    ),
   );
+
   const seen = new Set<string>();
   const history: CallRecord[] = [];
 
   for (const message of conversation) {
     if (message.role !== 'assistant') continue;
+
+    // SAFETY: only tool-prefixed message parts are read, and every accessed field is optional.
     for (const part of message.parts as ToolPartLike[]) {
       if (!part.type.startsWith('tool-') || part.toolCallId === undefined) continue;
+
       if (current.has(part.toolCallId) || seen.has(part.toolCallId)) continue;
       const tool = part.type.slice('tool-'.length);
-      const base = { ref: part.toolCallId, turn: 'earlier' as const, tool, input: part.input };
+      const base = { ref: part.toolCallId, turn: 'earlier' as const, tool, input: part.input ?? null };
+
       if (part.state === 'output-available') {
         seen.add(part.toolCallId);
-        history.push({ ...base, outcome: 'result', result: part.output });
+        history.push({ ...base, outcome: 'result', result: part.output ?? null });
       } else if (part.state === 'output-error') {
         seen.add(part.toolCallId);
-        history.push({ ...base, outcome: 'error', result: part.errorText });
+        history.push({ ...base, outcome: 'error', result: part.errorText ?? 'Unknown tool error.' });
       }
     }
   }
@@ -125,9 +137,9 @@ export function callHistory(
       ref: observation.id,
       turn: 'current',
       tool: observation.tool ?? 'unknown',
-      input: observation.input,
+      input: observation.input ?? null,
       outcome: failed ? 'error' : 'result',
-      result: failed ? observation.summary : observation.detail,
+      result: failed ? observation.summary : (observation.detail ?? null),
     });
   }
 
@@ -141,8 +153,11 @@ export function callHistory(
  */
 export function awaitingConfirmation(conversation: readonly AgentMessage[]): AwaitingAction[] {
   const pending = new Map<string, AwaitingAction>();
+
   for (const message of conversation) {
     if (message.role !== 'assistant') continue;
+
+    // SAFETY: blocker and tool fields are checked before use; unrelated message parts are skipped.
     for (const part of message.parts as (ToolPartLike & { data?: Blocker })[]) {
       if (part.type === 'data-blocker' && part.data?.kind === 'needs_confirmation' && part.data.tool !== undefined) {
         const key = stableHash({ tool: part.data.tool, input: part.data.input });
@@ -156,6 +171,7 @@ export function awaitingConfirmation(conversation: readonly AgentMessage[]): Awa
       }
     }
   }
+
   return [...pending.values()];
 }
 
@@ -172,67 +188,81 @@ const longText = 2_000;
  * never reduced to their field names, and only individual strings longer than a few thousand
  * characters are shortened, with the omission stated.
  */
-export function presentResult(value: unknown, ref: string, maxChars = defaultResultBudget): unknown {
+export function presentResult(value: JsonValue, ref: string, maxChars = defaultResultBudget): JsonValue {
   if (json(value).length <= maxChars) return value;
+
   if (Array.isArray(value)) return pageOf(value, ref, undefined, maxChars);
-  if (value !== null && typeof value === 'object') {
+
+  const object = jsonObject(value);
+
+  if (object !== undefined) {
     const fieldBudget = Math.max(1_000, Math.floor(maxChars / 4));
+
     return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, inner]) => {
-        if (Array.isArray(inner) && json(inner).length > fieldBudget) return [key, pageOf(inner, ref, key, fieldBudget)];
+      Object.entries(object).map(([key, inner]) => {
+        if (Array.isArray(inner) && json(inner).length > fieldBudget)
+          return [key, pageOf(inner, ref, key, fieldBudget)];
+
         return [key, shortenStrings(inner)];
       }),
     );
   }
+
   return shortenStrings(value);
 }
 
 /** The first page of a list: as many complete records as fit, and what was left out. */
-function pageOf(items: readonly unknown[], ref: string, path: string | undefined, maxChars: number) {
-  const records: unknown[] = [];
+function pageOf(items: readonly JsonValue[], ref: string, path: string | undefined, maxChars: number): JsonObject {
+  const records: JsonValue[] = [];
   let size = 0;
+
   for (const item of items) {
     const record = shortenStrings(item);
     const length = json(record).length + 1;
+
     if (records.length > 0 && size + length > maxChars) break;
     records.push(record);
     size += length;
   }
+
   const omitted = items.length - records.length;
   const locator = path === undefined ? { ref } : { ref, path };
-  return {
+
+  const page: JsonObject = {
     total: items.length,
     records,
-    ...(omitted === 0
-      ? {}
-      : {
-          omitted: {
-            count: omitted,
-            retrieve: `evidence(${JSON.stringify({ ...locator, page: 2, pageSize: records.length })})`,
-          },
-        }),
   };
+
+  if (omitted > 0) {
+    page['omitted'] = {
+      count: omitted,
+      retrieve: `evidence(${JSON.stringify({ ...locator, page: 2, pageSize: records.length })})`,
+    };
+  }
+
+  return page;
 }
 
-function shortenStrings(value: unknown): unknown {
-  if (typeof value === 'string') {
-    return value.length <= longText
-      ? value
-      : `${value.slice(0, longText)}…[${value.length - longText} more characters omitted]`;
+function shortenStrings(value: JsonValue): JsonValue {
+  const text = jsonString(value);
+
+  if (text !== undefined) {
+    return text.length <= longText
+      ? text
+      : `${text.slice(0, longText)}…[${text.length - longText} more characters omitted]`;
   }
+
   if (Array.isArray(value)) return value.map(shortenStrings);
-  if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([key, inner]) => [key, shortenStrings(inner)]),
-    );
+
+  const object = jsonObject(value);
+
+  if (object !== undefined) {
+    return Object.fromEntries(Object.entries(object).map(([key, inner]) => [key, shortenStrings(inner)]));
   }
+
   return value;
 }
 
-function json(value: unknown): string {
-  try {
-    return JSON.stringify(value) ?? String(value);
-  } catch {
-    return String(value);
-  }
+function json(value: JsonValue): string {
+  return JSON.stringify(value) ?? 'null';
 }

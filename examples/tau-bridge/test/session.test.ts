@@ -26,7 +26,12 @@ const tools: ToolSpec[] = [
 
 function session(decisions: Parameters<typeof scriptedController>[0]['decisions']) {
   const controller = scriptedController({ decisions });
-  const model = stubModel({ text: 'Created.', objects: [{ status: 'ready', arguments: { user_id: 'user_1', title: 'Meeting' } }] });
+
+  const model = stubModel({
+    text: 'Created.',
+    objects: [{ status: 'ready', arguments: { user_id: 'user_1', title: 'Meeting' } }],
+  });
+
   return { controller, session: new Session({ trackTasks: false, instructions: policy, tools, controller, model }) };
 }
 
@@ -40,21 +45,29 @@ describe('tau bridge session', () => {
 
     const first = await s.sendUser('Create a task called Meeting for user_1.');
     expect(first).toMatchObject({ type: 'tool_call', name: 'get_users', arguments: {} });
-    expect(first.decisions.map(d => d.action)).toEqual([{ type: 'tool', tool: 'get_users' }]);
+    expect(first.decisions.map((d) => d.action)).toEqual([{ type: 'tool', tool: 'get_users' }]);
 
-    const second = await s.sendToolResult({ id: first.type === 'tool_call' ? first.id : '', content: '[{"user_id":"user_1"}]' });
+    const second = await s.sendToolResult({
+      id: first.type === 'tool_call' ? first.id : '',
+      content: '[{"user_id":"user_1"}]',
+    });
+
     expect(second).toMatchObject({
       type: 'tool_call',
       name: 'create_task',
       arguments: { user_id: 'user_1', title: 'Meeting' },
     });
 
-    const final = await s.sendToolResult({ id: second.type === 'tool_call' ? second.id : '', content: '{"task_id":"task_9"}' });
+    const final = await s.sendToolResult({
+      id: second.type === 'tool_call' ? second.id : '',
+      content: '{"task_id":"task_9"}',
+    });
+
     expect(final).toMatchObject({ type: 'message', text: 'Created.', stopReason: 'completed' });
-    expect(final.decisions.map(d => d.action.type)).toEqual(['respond']);
+    expect(final.decisions.map((d) => d.action.type)).toEqual(['respond']);
 
     expect(controller.contexts[0]?.instructions).toBe(policy);
-    const outputs = s.messages.flatMap(m => m.parts).filter(p => p.type === 'tool-create_task');
+    const outputs = s.messages.flatMap((m) => m.parts).filter((p) => p.type === 'tool-create_task');
     expect(outputs).toMatchObject([{ state: 'output-available', output: { task_id: 'task_9' } }]);
   });
 
@@ -63,10 +76,17 @@ describe('tau bridge session', () => {
       { type: 'tool', tool: 'get_users' },
       { type: 'respond', outcome: 'blocked' },
     ]);
+
     const call = await s.sendUser('List users.');
-    const final = await s.sendToolResult({ id: call.type === 'tool_call' ? call.id : '', content: 'Error: down', error: true });
+
+    const final = await s.sendToolResult({
+      id: call.type === 'tool_call' ? call.id : '',
+      content: 'Error: down',
+      error: true,
+    });
+
     expect(final).toMatchObject({ type: 'message', stopReason: 'blocked' });
-    const parts = s.messages.flatMap(m => m.parts).filter(p => p.type === 'tool-get_users');
+    const parts = s.messages.flatMap((m) => m.parts).filter((p) => p.type === 'tool-get_users');
     expect(parts).toMatchObject([{ state: 'output-error', errorText: 'Error: down' }]);
   });
 
@@ -78,10 +98,12 @@ describe('tau bridge session', () => {
         { type: 'respond', outcome: 'completed' },
       ],
     });
+
     const model = stubModel({
-      text: prompt => (prompt.includes('task_9') ? 'Grounded.' : 'Ungrounded.'),
+      text: (prompt) => (prompt.includes('task_9') ? 'Grounded.' : 'Ungrounded.'),
       objects: [{ status: 'ready', arguments: { user_id: 'user_1', title: 'Meeting' } }],
     });
+
     const s = new Session({ trackTasks: false, instructions: policy, tools, controller, model });
 
     const call = await s.sendUser('Create a task called Meeting for user_1.');
@@ -95,16 +117,22 @@ describe('tau bridge session', () => {
       $defs: {
         User: {
           type: 'object',
-          properties: { user_id: { type: 'string' }, name: { type: 'string' }, tasks: { type: 'array', items: { type: 'string' } } },
+          properties: {
+            user_id: { type: 'string' },
+            name: { type: 'string' },
+            tasks: { type: 'array', items: { type: 'string' } },
+          },
         },
       },
       type: 'object',
       properties: { returns: { type: 'array', items: { $ref: '#/$defs/User' } } },
     };
+
     const transferReturn = {
       type: 'object',
       properties: { returns: { type: 'string', description: 'A transfer confirmation.' } },
     };
+
     expect(describeTool({ ...tools[0]!, returns: usersReturn })).toBe(
       'List users. Returns { user_id: string, name: string, tasks: string[] }[].',
     );
@@ -113,46 +141,61 @@ describe('tau bridge session', () => {
     );
 
     const controller = scriptedController({ decisions: [{ type: 'respond', outcome: 'needs_input' }] });
-    const s = new Session({ trackTasks: false,
+
+    const s = new Session({
+      trackTasks: false,
       instructions: policy,
       tools: [{ ...tools[0]!, returns: usersReturn }, tools[1]!],
       controller,
       model: stubModel(),
     });
+
     await s.sendUser('Mark my task done.');
-    expect(controller.contexts[0]?.availableTools.find(tool => tool.name === 'get_users')?.description).toContain(
+    expect(controller.contexts[0]?.availableTools.find((tool) => tool.name === 'get_users')?.description).toContain(
       'tasks: string[]',
     );
   });
 
   test('replies know the agent has tools and what they need', async () => {
     const controller = scriptedController({ decisions: [{ type: 'respond', outcome: 'needs_input' }] });
+
     const model = stubModel({
-      text: prompt =>
+      text: (prompt) =>
         prompt.includes('create_task(user_id, title)') && !prompt.includes('You have no tools') ? 'Aware.' : 'Unaware.',
     });
+
     const s = new Session({ trackTasks: false, instructions: policy, tools, controller, model });
     expect(await s.sendUser('Make a task.')).toMatchObject({ type: 'message', text: 'Aware.' });
   });
 
   test('prompts see a long tool result in full, including its last field', async () => {
     const long = { user_id: 'user_1', padding: 'p'.repeat(900), documents: ['MZDDS4', 'Q69X3R'] };
+
     const controller = scriptedController({
       decisions: [
         { type: 'tool', tool: 'get_users' },
         { type: 'respond', outcome: 'completed' },
       ],
     });
+
     const prompts: string[] = [];
+
     const model = stubModel({
-      text: prompt => {
+      text: (prompt) => {
         prompts.push(prompt);
+
         return 'Done.';
       },
     });
+
     const s = new Session({ trackTasks: false, instructions: policy, tools, controller, model });
     const call = await s.sendUser('Which documents do I have?');
-    const final = await s.sendToolResult({ id: call.type === 'tool_call' ? call.id : '', content: JSON.stringify(long) });
+
+    const final = await s.sendToolResult({
+      id: call.type === 'tool_call' ? call.id : '',
+      content: JSON.stringify(long),
+    });
+
     expect(final).toMatchObject({ type: 'message', text: 'Done.' });
     expect(prompts.at(-1)).toContain('Q69X3R');
   });
@@ -164,27 +207,116 @@ describe('tau bridge session', () => {
         { type: 'respond', outcome: 'needs_input' },
       ],
     });
+
     const model = stubModel({
       text: 'Which user is the task for?',
       objects: [{ status: 'missing', missing: 'the user id, from the user' }],
     });
+
     const s = new Session({ trackTasks: false, instructions: policy, tools, controller, model });
     const reply = await s.sendUser('Create a task called Meeting.');
     expect(reply).toMatchObject({ type: 'message', stopReason: 'needs_input' });
-    const blockers = s.messages.flatMap(m => m.parts).filter(p => p.type === 'data-blocker');
+    const blockers = s.messages.flatMap((m) => m.parts).filter((p) => p.type === 'data-blocker');
     expect(blockers).toMatchObject([
       { data: { kind: 'missing_evidence', tool: 'create_task', resolution: expect.stringContaining('the user id') } },
     ]);
+  });
+
+  test('observed arguments run only after tool selection and trace the cached relationship', async () => {
+    let judgments = 0;
+
+    const controller = scriptedController({
+      decisions: [
+        { type: 'tool', tool: 'get_catalog' },
+        { type: 'tool', tool: 'open_artifact' },
+        { type: 'tool', tool: 'open_artifact' },
+        { type: 'respond', outcome: 'completed' },
+      ],
+    });
+
+    const observedTools: ToolSpec[] = [
+      {
+        name: 'get_catalog',
+        description: 'List canvases.',
+        parameters: { type: 'object', properties: {} },
+        risk: 'read',
+      },
+      {
+        name: 'open_artifact',
+        description: 'Open an artifact.',
+        risk: 'read',
+        parameters: {
+          type: 'object',
+          properties: { artifact_id: { type: 'string' } },
+          required: ['artifact_id'],
+          additionalProperties: false,
+        },
+      },
+    ];
+
+    const s = new Session({
+      trackTasks: false,
+      instructions: policy,
+      tools: observedTools,
+      controller,
+      model: stubModel({ text: 'Done.' }),
+      observedArgumentJudge: (query) => {
+        judgments++;
+        const domain = query.domains.find((item) => item.path === 'canvases[].tokens[]')!;
+
+        return { domainId: domain.id, optionIds: domain.options.map((option) => option.id), sourceConfidence: 0.88 };
+      },
+    });
+
+    const catalog = await s.sendUser('Open every canvas.');
+    expect(catalog).toMatchObject({ type: 'tool_call', name: 'get_catalog' });
+    expect(judgments).toBe(0);
+
+    const first = await s.sendToolResult({
+      id: catalog.type === 'tool_call' ? catalog.id : '',
+      content: JSON.stringify({ canvases: [{ tokens: ['A-1', 'A-2'] }] }),
+    });
+
+    expect(first).toMatchObject({ type: 'tool_call', name: 'open_artifact', arguments: { artifact_id: 'A-1' } });
+    expect(judgments).toBe(1);
+    expect(first.trace.find((entry) => entry.kind === 'observed-arguments')?.detail).toMatchObject({
+      cacheHit: false,
+      sourcePath: 'canvases[].tokens[]',
+      sourceConfidence: 0.88,
+      selectedOptions: [{ value: 'A-1' }, { value: 'A-2' }],
+    });
+
+    const second = await s.sendToolResult({
+      id: first.type === 'tool_call' ? first.id : '',
+      content: '{"title":"First"}',
+    });
+
+    expect(second).toMatchObject({ type: 'tool_call', name: 'open_artifact', arguments: { artifact_id: 'A-2' } });
+    expect(judgments).toBe(1);
+    expect(second.trace.find((entry) => entry.kind === 'observed-arguments')?.detail).toMatchObject({ cacheHit: true });
+    await s.sendToolResult({ id: second.type === 'tool_call' ? second.id : '', content: '{"title":"Second"}' });
   });
 
   test('invalid replies use a status fallback without a repair call', async () => {
     const controller = scriptedController({ decisions: [{ type: 'respond', outcome: 'needs_input' }] });
     const fast = stubModel({ text: '<｜DSML｜ invoke name="get_users">' });
     const careful = stubModel({ text: 'Which task should I create?' });
-    const s = new Session({ trackTasks: false, instructions: policy, tools, controller, model: careful, argumentsModel: fast });
+
+    const s = new Session({
+      trackTasks: false,
+      instructions: policy,
+      tools,
+      controller,
+      model: careful,
+      argumentsModel: fast,
+    });
+
     const event = await s.sendUser('Help me.');
-    expect(event).toMatchObject({ type: 'message', text: 'More information is needed before this request can continue.' });
-    expect(event.trace.filter(entry => entry.kind === 'generate')).toHaveLength(1);
+    expect(event).toMatchObject({
+      type: 'message',
+      text: 'More information is needed before this request can continue.',
+    });
+    expect(event.trace.filter((entry) => entry.kind === 'generate')).toHaveLength(1);
   });
 
   test('rejects results for calls that are not pending', async () => {

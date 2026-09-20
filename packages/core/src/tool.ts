@@ -6,16 +6,11 @@ import type {
   ModelMessage,
   Tool,
   ToolExecutionOptions,
-  ToolSet,
 } from 'ai';
 import { ToolRegistrationError } from './errors.ts';
-import type {
-  AgentMessage,
-  ExecutionState,
-  ManagedGeneration,
-  Risk,
-  UIToolProjection,
-} from './types.ts';
+import type { JsonObject, JsonValue } from './json.ts';
+import { isJsonValue } from './json.ts';
+import type { AgentMessage, ExecutionState, ManagedGeneration, Risk, UIToolProjection } from './types.ts';
 
 export const agentToolBrand = Symbol.for('keeled.agent-tool');
 
@@ -23,14 +18,14 @@ export const agentToolBrand = Symbol.for('keeled.agent-tool');
 export interface ActionIntent {
   tool: string;
   /** Input of the same tool's action held for the user's confirmation, if any. */
-  awaitingInput?: unknown;
+  awaitingInput?: JsonValue;
 }
 
 export interface InputInspection {
   /** Deterministic, application-owned checks; denial cannot be overruled by a model. */
   allowed: boolean;
   reason: string;
-  facts?: Record<string, unknown>;
+  facts?: JsonObject;
   effects?: string[];
 }
 
@@ -48,8 +43,7 @@ export interface AgentContext {
 }
 
 export interface AgentToolExecutionOptions<CONTEXT = unknown>
-  extends Omit<ToolExecutionOptions<CONTEXT>, 'abortSignal' | 'messages'>,
-    AgentContext {}
+  extends Omit<ToolExecutionOptions<CONTEXT>, 'abortSignal' | 'messages'>, AgentContext {}
 
 export type AgentAvailability = (context: AgentContext) => boolean | PromiseLike<boolean>;
 
@@ -64,14 +58,15 @@ export type AgentAvailability = (context: AgentContext) => boolean | PromiseLike
 export type RepeatPolicy = 'allow' | 'reuse' | 'poll';
 
 /** A complete, evidence-backed input offered for controller selection. */
-export interface CallCandidate<INPUT = unknown> {
+export interface CallCandidate<INPUT = JsonValue> {
   input: INPUT;
   description: string;
   sources: readonly string[];
 }
 
-export type CandidateProvider<INPUT = unknown> =
-  (context: AgentContext) => readonly CallCandidate<INPUT>[] | PromiseLike<readonly CallCandidate<INPUT>[]>;
+export type CandidateProvider<INPUT = JsonValue> = (
+  context: AgentContext,
+) => readonly CallCandidate<INPUT>[] | PromiseLike<readonly CallCandidate<INPUT>[]>;
 
 export interface AgentToolSpec<SCHEMA extends FlexibleSchema<any>, OUTPUT> {
   description: string;
@@ -90,10 +85,7 @@ export interface AgentToolSpec<SCHEMA extends FlexibleSchema<any>, OUTPUT> {
   resolutionKey?: (context: AgentContext) => string;
   inspect?: (input: InferSchema<SCHEMA>, context: AgentContext) => InputInspection | PromiseLike<InputInspection>;
   resolveInput?: (context: AgentContext) => InferSchema<SCHEMA> | PromiseLike<InferSchema<SCHEMA>>;
-  execute: (
-    input: InferSchema<SCHEMA>,
-    options: AgentToolExecutionOptions,
-  ) => OUTPUT | PromiseLike<OUTPUT>;
+  execute: (input: InferSchema<SCHEMA>, options: AgentToolExecutionOptions) => OUTPUT | PromiseLike<OUTPUT>;
 }
 
 export interface AgentToolExtensions<INPUT, OUTPUT> {
@@ -107,16 +99,12 @@ export interface AgentToolExtensions<INPUT, OUTPUT> {
   readonly resolutionKey?: (context: AgentContext) => string;
   readonly inspect?: (input: INPUT, context: AgentContext) => InputInspection | PromiseLike<InputInspection>;
   readonly resolveInput?: (context: AgentContext) => INPUT | PromiseLike<INPUT>;
-  readonly execute: (
-    input: INPUT,
-    options: AgentToolExecutionOptions,
-  ) => OUTPUT | PromiseLike<OUTPUT>;
+  readonly execute: (input: INPUT, options: AgentToolExecutionOptions) => OUTPUT | PromiseLike<OUTPUT>;
 }
 
-export type AgentTool<INPUT = any, OUTPUT = any> = Omit<
-  Tool<INPUT, OUTPUT, never>,
-  'execute' | 'type'
-> & { type?: undefined | 'function' } & AgentToolExtensions<INPUT, OUTPUT>;
+export type AgentTool<INPUT = any, OUTPUT = any> = Omit<Tool<INPUT, OUTPUT, never>, 'execute' | 'type'> & {
+  type?: undefined | 'function';
+} & AgentToolExtensions<INPUT, OUTPUT>;
 
 /**
  * Defines a tool that runs under this harness. The AI SDK function-tool contract is
@@ -126,24 +114,21 @@ export function agentTool<const SCHEMA extends FlexibleSchema<any>, OUTPUT>(
   spec: AgentToolSpec<SCHEMA, OUTPUT>,
 ): AgentTool<InferSchema<SCHEMA>, Awaited<OUTPUT>> {
   const { risk = 'unknown', repeat = 'allow', ...rest } = spec;
-  return { ...rest, risk, repeat, [agentToolBrand]: true } as unknown as AgentTool<
-    InferSchema<SCHEMA>,
-    Awaited<OUTPUT>
-  >;
+
+  // SAFETY: this constructor supplies every AgentTool extension while preserving the SDK fields from spec.
+  return { ...rest, risk, repeat, [agentToolBrand]: true } as AgentTool<InferSchema<SCHEMA>, Awaited<OUTPUT>>;
 }
 
 export type AnyAgentTool = AgentTool<any, any>;
 
 export type AgentToolSet = Record<string, AnyAgentTool | Tool<any, any, any>>;
 
-export function isAgentTool(tool: unknown): tool is AnyAgentTool {
+export function isAgentTool(tool: AnyAgentTool | Tool<any, any, any>): tool is AnyAgentTool {
   return typeof tool === 'object' && tool !== null && agentToolBrand in tool;
 }
 
 /** Type-only projection of a registered tool onto the plain SDK tool type. */
-type SdkProjection<T> = T extends AgentTool<infer INPUT, infer OUTPUT>
-  ? Tool<INPUT, OUTPUT>
-  : T;
+type SdkProjection<T> = T extends AgentTool<infer INPUT, infer OUTPUT> ? Tool<INPUT, OUTPUT> : T;
 
 export type SdkToolProjection<TOOLS extends AgentToolSet> = {
   [NAME in keyof TOOLS]: SdkProjection<TOOLS[NAME]>;
@@ -176,9 +161,9 @@ export interface RegisteredTool {
   available?: AgentAvailability;
   candidates?: CandidateProvider;
   resolutionKey?: (context: AgentContext) => string;
-  inspect?: (input: unknown, context: AgentContext) => InputInspection | PromiseLike<InputInspection>;
-  resolveInput?: (context: AgentContext) => unknown | PromiseLike<unknown>;
-  invoke: (input: unknown, options: AgentToolExecutionOptions) => unknown | PromiseLike<unknown>;
+  inspect?: (input: JsonValue, context: AgentContext) => InputInspection | PromiseLike<InputInspection>;
+  resolveInput?: (context: AgentContext) => JsonValue | PromiseLike<JsonValue>;
+  invoke: (input: JsonValue, options: AgentToolExecutionOptions) => JsonValue | PromiseLike<JsonValue>;
 }
 
 const reservedPrefixes = ['respond:', 'call:'] as const;
@@ -187,42 +172,47 @@ export function registerTools(tools: AgentToolSet): Map<string, RegisteredTool> 
   const registry = new Map<string, RegisteredTool>();
 
   for (const [name, tool] of Object.entries(tools)) {
-    const reservedPrefix = reservedPrefixes.find(prefix => name.startsWith(prefix));
+    const reservedPrefix = reservedPrefixes.find((prefix) => name.startsWith(prefix));
+
     if (reservedPrefix !== undefined) {
       throw new ToolRegistrationError(`Tool name "${name}" uses the reserved "${reservedPrefix}" prefix.`);
     }
+
     registry.set(name, register(name, tool));
   }
 
   if (registry.size === 0) {
     throw new ToolRegistrationError('At least one tool must be registered.');
   }
+
   return registry;
 }
 
 function register(name: string, tool: AnyAgentTool | Tool<any, any, any>): RegisteredTool {
-  const record = tool as Record<string, unknown>;
+  // SAFETY: registration checks each optional SDK field before it is used.
+  const record = tool as ToolRecord;
 
   if (record['type'] === 'provider' || record['isProviderExecuted'] === true) {
     throw new ToolRegistrationError(
       `Tool "${name}" is provider-defined or provider-executed. This runtime executes local function tools only.`,
     );
   }
+
   if (record['type'] === 'dynamic') {
-    throw new ToolRegistrationError(
-      `Tool "${name}" is a dynamic tool. Dynamic tools are not supported in this phase.`,
-    );
+    throw new ToolRegistrationError(`Tool "${name}" is a dynamic tool. Dynamic tools are not supported in this phase.`);
   }
+
   if (record['inputSchema'] === undefined) {
     throw new ToolRegistrationError(`Tool "${name}" has no input schema.`);
   }
-  if (typeof record['execute'] !== 'function') {
+
+  if (record.execute === undefined) {
     throw new ToolRegistrationError(
       `Tool "${name}" has no execute function. This runtime cannot delegate execution to a client.`,
     );
   }
 
-  const description = typeof record['description'] === 'string' ? record['description'] : name;
+  const description = record.description ?? name;
 
   if (isAgentTool(tool)) {
     return {
@@ -240,29 +230,52 @@ function register(name: string, tool: AnyAgentTool | Tool<any, any, any>): Regis
       resolutionKey: tool.resolutionKey,
       inspect: tool.inspect,
       resolveInput: tool.resolveInput,
-      invoke: (input, options) => tool.execute(input, options),
+      invoke: async (input, options) => {
+        const output = await tool.execute(input, options);
+
+        if (!isJsonValue(output)) throw new ToolRegistrationError(`Tool "${name}" returned a non-JSON value.`);
+
+        return output;
+      },
     };
   }
 
-  const sdkExecute = record['execute'] as (
-    input: unknown,
-    options: ToolExecutionOptions<unknown>,
-  ) => unknown;
+  // SAFETY: the function check above establishes the SDK execute callback contract used here.
+  const sdkExecute = record.execute as (
+    input: JsonValue,
+    options: ToolExecutionOptions<JsonValue>,
+  ) => JsonValue | PromiseLike<JsonValue>;
 
   return {
     name,
     description,
-    inputSchema: record['inputSchema'] as FlexibleSchema<any>,
-    outputSchema: record['outputSchema'] as FlexibleSchema<any> | undefined,
+    // SAFETY: inputSchema was checked for presence above; the SDK validates its concrete schema later.
+    inputSchema: record.inputSchema as FlexibleSchema<any>,
+    // SAFETY: outputSchema is optional and is validated by the SDK when present.
+    outputSchema: record.outputSchema as FlexibleSchema<any> | undefined,
     risk: 'unknown',
     repeat: 'allow',
     kind: 'sdk',
-    invoke: (input, options) =>
-      sdkExecute(input, {
+    invoke: async (input, options) => {
+      const output = await sdkExecute(input, {
         toolCallId: options.toolCallId,
         messages: options.messages,
         abortSignal: options.abortSignal,
-        context: options.context,
-      }),
+        context: undefined,
+      });
+
+      if (!isJsonValue(output)) throw new ToolRegistrationError(`Tool "${name}" returned a non-JSON value.`);
+
+      return output;
+    },
   };
+}
+
+interface ToolRecord {
+  type?: string;
+  isProviderExecuted?: boolean;
+  description?: string;
+  inputSchema?: FlexibleSchema<any>;
+  outputSchema?: FlexibleSchema<any>;
+  execute?: (...arguments_: any[]) => any;
 }

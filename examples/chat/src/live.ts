@@ -12,6 +12,7 @@ import { Repo } from './repo.ts';
 import { buildTools } from './tools.ts';
 
 const modelId = process.env['KEELED_MODEL'];
+
 if (modelId === undefined) {
   console.error('Set KEELED_MODEL to an AI SDK model id, e.g. anthropic/claude-sonnet-4-5');
   process.exit(1);
@@ -47,4 +48,5 @@ const result = await agent.run({
 console.log(`stop reason: ${result.stopReason}`);
 
 console.log(`usage: ${JSON.stringify(result.usage)}`);
+
 console.log(`\n${result.text}`);

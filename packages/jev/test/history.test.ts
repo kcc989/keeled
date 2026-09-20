@@ -1,11 +1,21 @@
 import { describe, expect, test } from 'bun:test';
 import type { TypeSafeClient } from '@typesafe-ai/sdk';
-import { presentResult, reduceState, type AgentMessage, type Blocker, type ControllerContext, type Observation } from '@keeled/core';
+import {
+  presentResult,
+  reduceState,
+  type AgentMessage,
+  type Blocker,
+  type ControllerContext,
+  type Observation,
+  type JsonValue,
+  type JsonObject,
+} from '@keeled/core';
 import { jev } from '../src/controller.ts';
 import { blockerNote, callHistory, readinessNote, repetitionNote, respondNotes } from '../src/history.ts';
 import { controllerState } from '../src/state.ts';
+import { testFixture } from '@keeled/core/testing';
 
-function call(tool: string, input: unknown, output: unknown, id: string): Observation {
+function call(tool: string, input: JsonValue, output: JsonValue, id: string): Observation {
   return { id, cycle: 1, kind: 'tool-result', tool, summary: `${tool} returned a result.`, input, detail: output };
 }
 
@@ -32,6 +42,7 @@ const users = [{ user_id: 'user_1', tasks: ['task_1'] }];
 describe('call history', () => {
   test('the reducer keeps the input each tool was called with', () => {
     const state = reduceState([
+      // SAFETY: the test fixture intentionally models this exact compile-time shape.
       {
         id: 'a1',
         role: 'assistant',
@@ -44,20 +55,27 @@ describe('call history', () => {
             output: { status: 'completed' },
           },
         ],
-      } as unknown as AgentMessage,
+      } as AgentMessage,
     ]);
+
     expect(state.observations[0]?.input).toEqual({ task_id: 'task_1', status: 'completed' });
   });
 
   test('includes earlier turns and the current one, with arguments', () => {
+    // SAFETY: the test fixture intentionally models this exact compile-time shape.
     const earlier = {
       id: 'a0',
       role: 'assistant',
       parts: [{ type: 'tool-get_users', toolCallId: 'c0', state: 'output-available', input: {}, output: users }],
-    } as unknown as AgentMessage;
+    } as AgentMessage;
+
     const history = callHistory(
-      context([call('update_task_status', { task_id: 'task_1', status: 'completed' }, { status: 'completed' }, 'c1')], [earlier]),
+      context(
+        [call('update_task_status', { task_id: 'task_1', status: 'completed' }, { status: 'completed' }, 'c1')],
+        [earlier],
+      ),
     );
+
     expect(history).toEqual([
       { ref: 'c0', turn: 'earlier', tool: 'get_users', input: {}, outcome: 'result', result: users },
       {
@@ -85,14 +103,18 @@ describe('call history', () => {
     );
 
     const transfers = callHistory(
-      context([call('transfer', { summary: 'a' }, 'Transfer successful', 'c1'), call('transfer', { summary: 'b' }, 'Transfer successful', 'c2')]),
+      context([
+        call('transfer', { summary: 'a' }, 'Transfer successful', 'c1'),
+        call('transfer', { summary: 'b' }, 'Transfer successful', 'c2'),
+      ]),
     );
+
     expect(repetitionNote('transfer', transfers)).toBe(
       ' Called 2 times this turn (1 of them with the latest input; the last two returned identical results).' +
         ' Latest result: Transfer successful',
     );
 
-    for (const note of [once, twice, transfers].map(history => repetitionNote('get_users', history))) {
+    for (const note of [once, twice, transfers].map((history) => repetitionNote('get_users', history))) {
       expect(note).not.toContain('will not');
       expect(note).not.toContain('done');
     }
@@ -100,24 +122,34 @@ describe('call history', () => {
 
   test('a failed call is reported as failed', () => {
     const failed = callHistory(
-      context([{ id: 'c1', cycle: 1, kind: 'tool-error', tool: 'cancel', summary: 'Error: not found', input: { id: 'X' } }]),
+      context([
+        { id: 'c1', cycle: 1, kind: 'tool-error', tool: 'cancel', summary: 'Error: not found', input: { id: 'X' } },
+      ]),
     );
+
     expect(repetitionNote('cancel', failed)).toBe(' Called once this turn. Latest call failed: Error: not found');
   });
 
   test('Jev is asked with the history in its state and the notes in its options', async () => {
-    const requests: { state: Record<string, unknown>; questions: Record<string, { criteria?: Record<string, string> }> }[] = [];
-    const client = {
+    const requests: { state: JsonObject; questions: { [key: string]: { criteria?: { [key: string]: string } } } }[] =
+      [];
+
+    // SAFETY: the test fixture intentionally models this exact compile-time shape.
+    const client = testFixture<TypeSafeClient>({
       async systemOne(request: (typeof requests)[number]) {
         requests.push(request);
+
         return {
           answers: { action: { choice: 'respond:completed', confidence: 1, probabilities: {} } },
           usage: { input_tokens: 0, output_tokens: 0 },
         };
       },
-    } as unknown as TypeSafeClient;
+    });
 
-    const decision = await jev({ client }).control(context([call('get_users', {}, users, 'c1'), call('get_users', {}, users, 'c2')]));
+    const decision = await jev({ client }).control(
+      context([call('get_users', {}, users, 'c1'), call('get_users', {}, users, 'c2')]),
+    );
+
     expect(decision.action).toEqual({ type: 'respond', outcome: 'completed' });
     expect(requests).toHaveLength(1);
     expect(Object.keys(requests[0]!.questions)).toEqual(['action']);
@@ -139,7 +171,14 @@ describe('what Jev is shown', () => {
   const userDetails = {
     user_id: 'raj_sanchez_7340',
     name: { first_name: 'Raj', last_name: 'Sanchez' },
-    address: { address1: '123 Main St', address2: 'Suite 400', city: 'Philadelphia', country: 'USA', state: 'PA', zip: '19103' },
+    address: {
+      address1: '123 Main St',
+      address2: 'Suite 400',
+      city: 'Philadelphia',
+      country: 'USA',
+      state: 'PA',
+      zip: '19103',
+    },
     email: 'raj.sanchez@example.com',
     dob: '1966-10-08',
     payment_methods: {
@@ -153,7 +192,10 @@ describe('what Jev is shown', () => {
   };
 
   test('a full result reaches Jev, including fields at the end', () => {
-    const state = controllerState(context([call('get_user_details', { user_id: 'raj_sanchez_7340' }, userDetails, 'c1')]));
+    const state = controllerState(
+      context([call('get_user_details', { user_id: 'raj_sanchez_7340' }, userDetails, 'c1')]),
+    );
+
     expect(JSON.stringify(userDetails).length).toBeGreaterThan(600);
     expect(state['tool_calls']).toEqual([
       {
@@ -177,12 +219,16 @@ describe('what Jev is shown', () => {
       available_units: { basic_standard: 3, standard: 9, premium: 2 },
       prices: { basic_standard: 90 + n, standard: 180 + n, premium: 400 + n },
     });
+
     const items = Array.from({ length: 40 }, (_, n) => item(n));
+
+    // SAFETY: the test fixture intentionally models this exact compile-time shape.
     const shown = presentResult(items, 'call_9', 2_000) as {
       total: number;
       records: typeof items;
       omitted: { count: number; retrieve: string };
     };
+
     expect(shown.total).toBe(40);
     expect(shown.records.length).toBeGreaterThan(0);
     // Every shown record is complete, in its original order.
@@ -194,21 +240,23 @@ describe('what Jev is shown', () => {
   test('a result within budget is unchanged', () => {
     expect(presentResult(userDetails, 'c1')).toBe(userDetails);
   });
-
 });
 
 describe('authorization', () => {
   test('one request carries the pending action and the three questions', async () => {
-    const requests: { state: Record<string, unknown>; questions: Record<string, unknown> }[] = [];
-    const client = {
+    const requests: { state: JsonObject; questions: JsonObject }[] = [];
+
+    // SAFETY: the test fixture intentionally models this exact compile-time shape.
+    const client = testFixture<TypeSafeClient>({
       async systemOne(request: (typeof requests)[number]) {
         requests.push(request);
+
         return {
           answers: { permitted: { noul: 0.9 }, needs_verification: { noul: 0.8 }, confirmed: { noul: 0.1 } },
           usage: { input_tokens: 0, output_tokens: 0 },
         };
       },
-    } as unknown as TypeSafeClient;
+    });
 
     const answer = await jev({ client }).authorize!(context([]), {
       tool: 'cancel_document',
@@ -235,20 +283,34 @@ describe('authorization', () => {
 
   test('a blocked tool carries its kind, reason, and resolution into its option', () => {
     const blocker = (kind: Blocker['kind'], reason: string, resolution: string) =>
+      // SAFETY: the test fixture intentionally models this exact compile-time shape.
       ({ id: 'b', cycle: 1, kind, tool: 'cancel', input: { id: 'X' }, reason, resolution }) as Blocker;
+
     expect(blockerNote('cancel', [blocker('needs_confirmation', 'Awaiting confirmation.', 'Ask the user.')])).toBe(
       ' Blocked this turn (needs_confirmation): Awaiting confirmation. To resolve: Ask the user.',
     );
     expect(blockerNote('lookup', [blocker('policy_denied', 'No.', 'Explain.')])).toBe('');
     expect(
-      blockerNote('cancel', [blocker('policy_denied', 'Not permitted.', 'Explain.'), blocker('policy_denied', 'Not permitted.', 'Explain.')]),
+      blockerNote('cancel', [
+        blocker('policy_denied', 'Not permitted.', 'Explain.'),
+        blocker('policy_denied', 'Not permitted.', 'Explain.'),
+      ]),
     ).toBe(' Blocked 2 times this turn (policy_denied): Not permitted. To resolve: Explain.');
   });
 
   test('a pending confirmation points the respond option at asking the user', () => {
     const notes = respondNotes([
-      { id: 'b', cycle: 1, kind: 'needs_confirmation', tool: 'cancel', input: { id: 'X' }, reason: 'r', resolution: 'Ask.' },
+      {
+        id: 'b',
+        cycle: 1,
+        kind: 'needs_confirmation',
+        tool: 'cancel',
+        input: { id: 'X' },
+        reason: 'r',
+        resolution: 'Ask.',
+      },
     ]);
+
     expect(notes.needsInput).toBe(
       ' An action awaits the user\'s explicit confirmation: cancel({"id":"X"}). Asking the user to confirm it resolves this.',
     );
@@ -256,13 +318,23 @@ describe('authorization', () => {
 });
 
 describe('readiness', () => {
-  const lookup = { name: 'get_document_details', description: 'Look up.', risk: 'read' as const, required: ['document_id'] };
+  const lookup = {
+    name: 'get_document_details',
+    description: 'Look up.',
+    risk: 'read' as const,
+    required: ['document_id'],
+  };
+
   const user = { user_id: 'u1', documents: ['M05KNL', 'UHDAHF'] };
 
   test('known values are listed, with those already used this turn marked', () => {
     const history = callHistory(
-      context([call('get_user_details', { user_id: 'u1' }, user, 'c1'), call('get_document_details', { document_id: 'M05KNL' }, { document_id: 'M05KNL', workspace: 'OPS' }, 'c2')]),
+      context([
+        call('get_user_details', { user_id: 'u1' }, user, 'c1'),
+        call('get_document_details', { document_id: 'M05KNL' }, { document_id: 'M05KNL', workspace: 'OPS' }, 'c2'),
+      ]),
     );
+
     const note = readinessNote(lookup, context([]), history);
     expect(note).toContain('document_id: M05KNL (workspace=OPS; already used this turn)');
     expect(note).toContain('UHDAHF (one of documents returned by get_user_details)');
@@ -274,24 +346,35 @@ describe('readiness', () => {
 });
 
 test('Jev selects a complete call by ID and keeps tool resolution as a fallback', async () => {
-  let sent: unknown;
-  const client = {
-    async systemOne(request: unknown) {
+  let sent: JsonValue;
+
+  // SAFETY: the test fixture intentionally models this exact compile-time shape.
+  const client = testFixture<TypeSafeClient>({
+    async systemOne(request: JsonValue) {
       sent = request;
+
       return {
         answers: { action: { choice: 'call:1:0', confidence: 0.9, probabilities: {} } },
         usage: { input_tokens: 0, output_tokens: 0 },
       };
     },
-  } as unknown as TypeSafeClient;
+  });
+
   const state = context([]);
+
   const decision = await jev({ client }).control({
     ...state,
-    availableTools: [{
-      name: 'lookup', description: 'Read a document.', risk: 'read', required: ['id'],
-      candidates: [{ id: 'call:1:0', input: { id: 'R1' }, description: 'User document', sources: ['c1'] }],
-    }],
+    availableTools: [
+      {
+        name: 'lookup',
+        description: 'Read a document.',
+        risk: 'read',
+        required: ['id'],
+        candidates: [{ id: 'call:1:0', input: { id: 'R1' }, description: 'User document', sources: ['c1'] }],
+      },
+    ],
   });
+
   expect(decision.action).toEqual({ type: 'tool', tool: 'lookup', candidateId: 'call:1:0' });
   const text = JSON.stringify(sent);
   expect(text).toContain('call:1:0');

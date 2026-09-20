@@ -1,4 +1,5 @@
 import type { TaskContract } from './task.ts';
+import type { JsonObject, JsonValue } from './json.ts';
 import type { FlexibleSchema, LanguageModel, ModelMessage, Tool, ToolSet, UIMessage } from 'ai';
 
 export type StopReason = 'completed' | 'needs_input' | 'blocked' | 'limit' | 'error' | 'cancelled';
@@ -78,8 +79,8 @@ export interface Observation {
   tool?: string;
   summary: string;
   /** For tool observations, the validated input the call was made with. */
-  input?: unknown;
-  detail?: unknown;
+  input?: JsonValue;
+  detail?: JsonValue;
 }
 
 /**
@@ -102,7 +103,7 @@ export interface Blocker {
   kind: BlockerKind;
   tool?: string;
   /** The input of the attempt that was blocked, when there was one. */
-  input?: unknown;
+  input?: JsonValue;
   reason: string;
   /** What would resolve it. */
   resolution: string;
@@ -111,10 +112,10 @@ export interface Blocker {
 export interface InspectionRecord {
   id: string;
   tool: string;
-  input: unknown;
+  input: JsonValue;
   allowed: boolean;
   reason: string;
-  facts?: Record<string, unknown>;
+  facts?: JsonObject;
   effects?: string[];
 }
 
@@ -146,9 +147,7 @@ export interface AgentMetadata {
 export interface DecisionRecord {
   id: string;
   cycle: number;
-  action:
-    | { type: 'tool'; tool: string }
-    | { type: 'respond'; outcome: 'completed' | 'needs_input' | 'blocked' };
+  action: { type: 'tool'; tool: string } | { type: 'respond'; outcome: 'completed' | 'needs_input' | 'blocked' };
   rationale?: string;
   confidence?: number;
   probabilities?: Record<string, number>;
@@ -160,14 +159,7 @@ export interface BlockerRecord extends Blocker {}
 export interface TransitionRecord {
   id: string;
   cycle: number;
-  kind:
-    | 'cycle-start'
-    | 'limit'
-    | 'cancelled'
-    | 'error'
-    | 'finish'
-    | 'policy-block'
-    | 'authorized';
+  kind: 'cycle-start' | 'limit' | 'cancelled' | 'error' | 'finish' | 'policy-block' | 'authorized';
   detail?: string;
   stopReason?: StopReason;
 }
@@ -187,11 +179,17 @@ export type AgentMessage<TOOLS extends UIToolProjection = UIToolProjection> = UI
   TOOLS
 >;
 
-export type UIToolProjection = Record<string, { input: unknown; output: unknown }>;
+export type UIToolProjection = Record<string, { input: JsonValue; output: JsonValue }>;
 
 export interface GenerationTrace {
-  purpose: string; structured: boolean; ms: number; status: 'success' | 'error';
-  inputTokens?: number; outputTokens?: number; reasoningTokens?: number; error?: string;
+  purpose: string;
+  structured: boolean;
+  ms: number;
+  status: 'success' | 'error';
+  inputTokens?: number;
+  outputTokens?: number;
+  reasoningTokens?: number;
+  error?: string;
 }
 
 export interface ModelCallOptions {
@@ -234,7 +232,7 @@ export type { ToolSet };
 export interface UncertainOperation {
   id: string;
   tool: string;
-  input: unknown;
+  input: JsonValue;
   reason: string;
   status: 'unknown' | 'applied' | 'not_applied';
 }
