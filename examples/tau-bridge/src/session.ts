@@ -5,7 +5,6 @@ import {
   evidenceCalculationTool,
   modelTaskTracker,
   type Agent,
-  type RecoveryConfig,
   type AgentMessage,
   type AgentPolicy,
   type AgentToolSet,
@@ -68,7 +67,6 @@ export interface SessionOptions {
   /** Model used for state-changing tool arguments. Defaults to `argumentsModel`. */
   writeArgumentsModel?: LanguageModel;
   policy?: AgentPolicy;
-  recovery?: RecoveryConfig;
 }
 
 export class SessionConflictError extends Error {}
@@ -98,7 +96,6 @@ export class Session {
         options.trackTasks === false ? undefined : modelTaskTracker({ extractionModel: options.argumentsModel }),
       controller: observe(options.controller, trace, (decision) => this.#decisions.push(logOf(decision))),
       model: options.model,
-      recovery: options.recovery,
       onGeneration: (entry) => trace({ kind: 'generate', ms: entry.ms, detail: entry }),
       tools: {
         ...bridgeTools(

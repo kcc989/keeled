@@ -1,8 +1,16 @@
 # Experiment 3: one-call stall recovery
 
-This experiment adds optional `recovery` to `createAgent`. It is off by default.
-The tested configuration was rejected: 8/10 successes versus a saved 9/10 baseline,
-with 24 recovery calls. Read the [results](RESULTS.md) before enabling or extending it.
+This is a historical record, not a supported API. The tested configuration was
+rejected: 8/10 successes versus a saved 9/10 baseline, with 24 recovery calls.
+Only documentation and metrics are retained in the current tree. The recovery
+implementation, validation fix, dependencies, tests, and analysis script are not
+part of this documentation-only change.
+
+The prototype is preserved in historical commit
+[`8aff42c`](https://github.com/kcc989/keeled/commit/8aff42c4a0131e97808c2053413514a83cbc95aa).
+Read the [results](RESULTS.md) before designing another configuration.
+
+The prototype exposed this API (unavailable in the current tree):
 
 ```ts
 const agent = createAgent({
@@ -15,7 +23,7 @@ const agent = createAgent({
 });
 ```
 
-The existing loop guard can trigger recovery. A blocked controller response can also trigger it. A needs-input response triggers it only after input-resolution, missing-evidence, or no-progress blockers. Normal completed responses and ordinary initial questions do not trigger recovery.
+In the prototype, the existing loop guard could trigger recovery. A blocked controller response could also trigger it. A needs-input response triggers it only after input-resolution, missing-evidence, or no-progress blockers. Normal completed responses and ordinary initial questions do not trigger recovery.
 
 Recovery receives the retained request, instructions, goals and constraints, tool history, blockers, uncertain writes, and current tool schemas. It returns one call, one missing-information question, or a blocker. The prompt requires a lookup before asking for information available through tools. This is model guidance, not a deterministic proof that a question is necessary.
 
@@ -25,11 +33,11 @@ The key includes the request, instructions, retained goal text/status, and const
 
 The bridge enables this option with `KEELED_RECOVERY_MODEL`. It uses the existing provider list and low reasoning effort. No domain names, tool-name rules, or benchmark answer logic were added to the runtime or bridge.
 
-Recovery decisions use a strict Zod discriminated union; `RecoveryDecision` is inferred from that schema. Zod-based tool contracts keep their own validators, refinements, and transforms. Raw JSON Schema contracts without a validator are checked with Ajv and standard format validation. This closes a pre-existing SDK fallback that accepted inputs without checking the JSON Schema. We do not convert those contracts to Zod because its converter rejects standard conditional constraints such as `if`/`then`.
+Recovery decisions use a strict Zod discriminated union; `RecoveryDecision` is inferred from that schema. Zod-based tool contracts keep their own validators, refinements, and transforms. Raw JSON Schema contracts without a validator are checked with Ajv and standard format validation. That prototype fix closed a pre-existing SDK fallback that accepted inputs without checking the JSON Schema. We do not convert those contracts to Zod because its converter rejects standard conditional constraints such as `if`/`then`.
 
-The synthetic tests cover renamed lookup tools, missing dependencies, invalid arguments, unavailable tools, policy denial, confirmation, unknown write outcomes, transient reads, repeated decisions, persisted allowance, unrelated observations, ordinary discovery, missing user information, and budget exhaustion.
+The prototype synthetic tests covered renamed lookup tools, missing dependencies, invalid arguments, unavailable tools, policy denial, confirmation, unknown write outcomes, transient reads, repeated decisions, persisted allowance, unrelated observations, ordinary discovery, missing user information, and budget exhaustion.
 
-For the airline screen:
+Historical airline screen command, requiring the prototype checkout:
 
 ```sh
 bun --env-file=/Users/caseycollins/projects/tau2-bench/.env run tau3 airline \
@@ -38,4 +46,4 @@ bun --env-file=/Users/caseycollins/projects/tau2-bench/.env run tau3 airline \
   --save-to /absolute/path/to/results
 ```
 
-Set `KEELED_RECOVERY_MODEL` to the desired OpenRouter model ID in the environment. The recorded screen used `deepseek/deepseek-v4.1-flash` for both the existing model and recovery, routed through Together/Modal. Raw results remain local and are ignored by Git. `analyze.py` computes the report from the recorded results and a saved baseline. See `RESULTS.md` for results and limitations.
+The prototype used `KEELED_RECOVERY_MODEL` to select the recovery model. This setting is not supported in the current tree. The recorded screen used `deepseek/deepseek-v4.1-flash` for both the existing model and recovery, routed through Together/Modal. Raw results remain local and are ignored by Git. The historical commit contains `analyze.py`, which computed the report from the recorded results and a saved baseline. See `RESULTS.md` for results and limitations.

@@ -24,12 +24,6 @@ const providers = providersFromEnvironment();
 
 const { model, argumentsModel, writeArgumentsModel } = openRouterModels(modelId, apiKey, providers);
 
-const recoveryId = process.env['KEELED_RECOVERY_MODEL'];
-
-const recovery = recoveryId
-  ? { model: openRouterModels(recoveryId, apiKey, providers).writeArgumentsModel }
-  : undefined;
-
 const controller = jev();
 
 const policy = { generationTimeoutMs: 60_000, turnTimeoutMs: 240_000 };
@@ -69,7 +63,6 @@ const server = Bun.serve({
             argumentsModel,
             writeArgumentsModel,
             policy,
-            recovery,
           }),
         );
 

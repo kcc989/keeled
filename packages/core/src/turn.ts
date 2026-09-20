@@ -127,10 +127,6 @@ export class Turn {
     this.#record({ type: 'data-operation', data: operation });
   }
 
-  recordRecovery(revision: string): void {
-    this.#record({ type: 'data-recovery', data: { revision } });
-  }
-
   recordTask(task: TaskContract): void {
     this.#record({ type: 'data-task', data: task });
   }
@@ -355,7 +351,6 @@ function toPart(chunk: Chunk, parts: AgentMessage['parts']): AgentMessage['parts
   switch (chunk.type) {
     case 'data-inspection':
     case 'data-operation':
-    case 'data-recovery':
     case 'data-task':
     case 'data-decision':
     case 'data-blocker':

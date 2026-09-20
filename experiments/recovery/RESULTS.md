@@ -1,6 +1,6 @@
 # Experiment 3 result: reject this configuration
 
-The corrected recovery candidate passed **8/10** airline cases. The saved historical baseline passed **9/10**. No case that failed in the baseline became a success. Case 8 regressed. Recovery was called 24 times across 10 cases, including cases that ended in valid policy refusals. This does not justify enabling the option by default.
+The corrected recovery candidate passed **8/10** airline cases. The saved historical baseline passed **9/10**. No case that failed in the baseline became a success. Case 8 regressed. Recovery was called 24 times across 10 cases, including cases that ended in valid policy refusals. This does not justify adopting the configuration. Only documentation and metrics are retained; the implementation and independent validation fix require separate review.
 
 | Metric                                    | Saved baseline | Corrected recovery candidate |
 | ----------------------------------------- | -------------: | ---------------------------: |
@@ -48,7 +48,7 @@ Recovery ran in 9/10 cases. The ledger prevents repeated attempts for the same k
 - Baseline: `/Users/caseycollins/projects/tau2-bench/data/simulations/keeled_codex_baseline_single_20260919/results.json`.
 - Corrected raw results: `airline-10-validated/results.json` and `airline-10-validated/run.log`.
 - Earlier screen: `airline-10/results.json`, `airline-10/initial-run.log`, and `airline-10/resumed-run.log`.
-- Recomputed metrics: `summary.json`. Reproduce them with `python3 experiments/recovery/analyze.py <candidate-results> <earlier-results> <baseline-results>`.
+- Recomputed metrics: `summary.json`. The analysis script and prototype are preserved in historical commit `8aff42c4a0131e97808c2053413514a83cbc95aa`; they are not in the current tree. Recomputing the metrics requires that historical script and the local raw results.
 
 Raw artifacts are local and ignored by Git. The compact report and metrics remain reviewable. Other benchmark processes were active during this work, so provider contention can affect latency.
 
@@ -70,4 +70,4 @@ Cost estimates use uncached list rates of $0.30/M input and $1.20/M output for T
 
 At the end of the experiment, `bun run check` passed: lint, formatting, TypeScript, and **114 tests**. The tests cover switched and renamed tools, missing dependencies, transient reads, missing user information, invalid proposals, JSON Schema validation, Zod transforms/refinements, policy denial, confirmation, unknown writes, budget accounting, and persisted recovery allowance. Runtime and bridge changes contain no airline-specific rules.
 
-This is a first-10 screen, not the complete acceptance evaluation. Experiments 1 and 2 were not combined, held-out tasks were not repeated, and a plain LLM controller under the same safeguards was not run. The earlier unsafe prototype is not a repeat trial of the corrected implementation. Given the success regression and broad trigger, further acceptance testing is not warranted for this configuration. Keep the option disabled by default.
+This is a first-10 screen, not the complete acceptance evaluation. Experiments 1 and 2 were not combined, held-out tasks were not repeated, and a plain LLM controller under the same safeguards was not run. The earlier unsafe prototype is not a repeat trial of the corrected implementation. Given the success regression and broad trigger, further acceptance testing is not warranted for this configuration. Do not adopt this configuration. The current tree contains only the historical documentation and metrics.

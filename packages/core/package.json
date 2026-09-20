@@ -9,8 +9,6 @@
   "dependencies": {
     "@ai-sdk/provider-utils": "5.0.43",
     "ai": "7.0.105",
-    "ajv": "8.17.1",
-    "ajv-formats": "3.0.1",
     "zod": "^4.1.8"
   }
 }

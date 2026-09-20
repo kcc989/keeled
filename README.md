@@ -19,8 +19,8 @@ The public interface uses promises and AI SDK types.
 ## Experiments
 
 See the [experiment record](experiments/README.md) before repeating controller changes.
-The optional stall-recovery configuration was rejected after an 8/10 airline screen
-against a saved 9/10 baseline. It remains off by default.
+The stall-recovery prototype was rejected after an 8/10 airline screen
+against a saved 9/10 baseline. Only its documentation and results are retained.
 
 ## Packages
 

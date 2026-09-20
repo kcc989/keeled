@@ -4,9 +4,9 @@ Read this index before repeating or extending a controller experiment. Each reco
 must distinguish the hypothesis, tested implementation, measured results, and
 adoption decision. Keep failed runs and measurement limits visible.
 
-| Experiment                       | Status                                       | Result                                                                                            | Record                                                                                                         |
-| -------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| 3: One reasoning call at a stall | Rejected configuration; opt-in code retained | 8/10 airline cases versus a saved 9/10 baseline; 24 recovery calls; three missed reference writes | [Design](recovery/README.md), [results and limitations](recovery/RESULTS.md), [metrics](recovery/summary.json) |
+| Experiment                       | Status                                     | Result                                                                                            | Record                                                                                                         |
+| -------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| 3: One reasoning call at a stall | Rejected configuration; documentation only | 8/10 airline cases versus a saved 9/10 baseline; 24 recovery calls; three missed reference writes | [Design](recovery/README.md), [results and limitations](recovery/RESULTS.md), [metrics](recovery/summary.json) |
 
 Experiment numbers follow the original proposal. This index does not imply that
 Experiments 1 and 2 were run or combined in this checkout.
@@ -21,8 +21,8 @@ For Experiment 3, preserve the following findings:
   user messages can change the key while the underlying blocker remains similar.
 - Recovery did not finish the available lookups in case 8. Do not claim that a
   reasoning model alone solved missing dependencies.
-- The experiment exposed an independent schema-validation gap. Keep Zod
-  validation for Zod contracts and real validation for supplied JSON Schema.
+- The experiment exposed an independent schema-validation gap. A separate fix should preserve Zod
+  validation for Zod contracts and add real validation for supplied JSON Schema.
   Recovery proposals never grant permission to execute.
 - Lower measured latency and estimated cost did not offset the success loss.
   These single trials against a historical baseline do not establish causation.

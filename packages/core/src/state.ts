@@ -9,12 +9,11 @@ import type {
 } from './types.ts';
 import type { JsonValue } from './json.ts';
 
-export const reducerVersion = 5;
+export const reducerVersion = 4;
 
 export function emptyState(): ExecutionState {
   return {
     reducerVersion,
-    recoveryRevisions: [],
     task: emptyTask(),
     uncertainOperations: [],
     inspections: [],
@@ -61,7 +60,6 @@ function nextTurnState(completed: ExecutionState): ExecutionState {
   return {
     ...emptyState(),
     task: completed.task,
-    recoveryRevisions: completed.recoveryRevisions,
     uncertainOperations: completed.uncertainOperations,
     inspections: completed.inspections,
     stopReason: completed.stopReason,
@@ -75,13 +73,6 @@ interface ReduceContext {
 
 function applyPart(state: ExecutionState, part: AgentMessage['parts'][number], context: ReduceContext): void {
   const type = part.type;
-
-  if (part.type === 'data-recovery') {
-    state.recoveryRevisions.push(part.data.revision);
-    state.stepsUsed += 1;
-
-    return;
-  }
 
   if (part.type === 'data-inspection') {
     state.inspections.push(structuredClone(part.data));

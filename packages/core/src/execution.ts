@@ -1,5 +1,3 @@
-import { validateInput } from './validation.ts';
-import { recover } from './recovery.ts';
 import { abortable } from './async.ts';
 import { applyTaskPatch } from './task.ts';
 import { createUIMessageStream, createUIMessageStreamResponse } from 'ai';
@@ -335,18 +333,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
               continue;
             }
 
-            if (
-              action.outcome === 'blocked' ||
-              (action.outcome === 'needs_input' &&
-                this.#turn.state.blockers.some((b) =>
-                  ['invalid_input', 'missing_evidence', 'no_progress'].includes(b.kind),
-                ))
-            ) {
-              const recovery = await this.#recover(action.outcome);
-
-              if (recovery === 'continued') continue;
-              outcome = recovery ?? action.outcome;
-            } else outcome = action.outcome;
+            outcome = action.outcome;
             break;
           }
 
@@ -358,15 +345,6 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
         const stalled = this.#turn.detectNoProgress();
 
         if (stalled !== undefined) {
-          const recovery = await this.#recover();
-
-          if (recovery === 'continued') continue;
-
-          if (recovery !== undefined) {
-            outcome = recovery;
-            break;
-          }
-
           const evidence = this.#turn.distinctEvidence();
 
           if (reportedAtEvidence === evidence) {
@@ -424,73 +402,6 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     return context.availableTools.some((tool) => tool.name === action.tool)
       ? action
       : { type: 'respond', outcome: 'blocked' };
-  }
-
-  /** Conservative revision: observations alone never refill the recovery allowance. */
-  async #recover(
-    fallback: 'blocked' | 'needs_input' = 'blocked',
-  ): Promise<'continued' | 'blocked' | 'needs_input' | undefined> {
-    const config = this.#definition.recovery;
-
-    if (config === undefined || !this.#turn.hasWorkBudget()) return undefined;
-    const task = this.#turn.state.task;
-
-    const revision = stableHash({
-      request: this.#request,
-      instructions: this.#definition.instructions,
-      goals: task.goals.map(({ text, status }) => ({ text, status })),
-      constraints: task.constraints.map(({ text }) => text),
-    });
-
-    if (this.#turn.state.recoveryRevisions.includes(revision)) return fallback;
-    // Persist and charge before generation, including invalid responses and failed calls.
-    this.#turn.recordRecovery(revision);
-
-    try {
-      const available = await this.#availableTools();
-
-      const contracts = await Promise.all(
-        available.map(async (entry) => ({
-          ...entry,
-          schema: await asSchema(this.#definition.registry.get(entry.name)!.inputSchema).jsonSchema,
-        })),
-      );
-
-      const decision = await recover(
-        config,
-        this.#agentContext(undefined),
-        callHistory(this.#turn.conversation, this.#turn.state.observations),
-        contracts,
-      );
-
-      if (decision.type !== 'call') {
-        const reason = decision.type === 'blocked' ? decision.reason : decision.question;
-        this.#turn.recordBlocker('missing_evidence', reason, reason);
-
-        return decision.type;
-      }
-
-      if (!available.some((tool) => tool.name === decision.tool) || !this.#turn.hasWorkBudget()) return fallback;
-      const action = { type: 'tool' as const, tool: decision.tool };
-      this.#turn.recordDecision({ action, rationale: 'One stall recovery proposal; normal checks apply.' });
-      const before = this.#turn.state.observations.filter((o) => o.kind === 'tool-result').length;
-      await this.#callTool(action, { preparedInput: decision.input });
-
-      return this.#turn.state.observations.filter((o) => o.kind === 'tool-result').length > before
-        ? 'continued'
-        : this.#turn.state.blockers.at(-1)?.kind === 'needs_confirmation'
-          ? 'needs_input'
-          : fallback;
-    } catch (error) {
-      if (this.#turn.isAborted() || isAbortError(error)) throw error;
-      this.#turn.recordBlocker(
-        'no_progress',
-        `Recovery failed: ${errorMessage(error)}`,
-        'Resolve the blocker before retrying.',
-      );
-
-      return fallback;
-    }
   }
 
   // --- tool invocation --------------------------------------------------
@@ -575,7 +486,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       return;
     }
 
-    const validated = await validateInput(tool, input);
+    const validated = await safeValidateTypes({ value: input, schema: tool.inputSchema });
 
     if (!validated.success) {
       this.#resolutionFailures.set(tool.name, {
