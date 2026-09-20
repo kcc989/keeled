@@ -67,11 +67,20 @@ An event is `{ type: 'tool_call', id, name, arguments, decisions }` or
 bun run tau3 mock
 bun run tau3 <domain> --num-tasks 5
 bun run tau3 <domain> --task-ids 0 1 2 --max-concurrency 1
+bun run tau3:first airline 10
 ```
 
 `tau3` starts the bridge, runs `tau2 run --domain <domain> --agent keeled` in the τ³-bench
 checkout, and stops the bridge. Any other `tau2 run` option passes through. The domain is passed through without special handling. The default is **one trial per task**;
 keep screening runs at one trial until a promising change warrants a larger evaluation.
+
+`tau3:first <domain> <count>` runs task IDs `0` through `count - 1`. It accepts other
+`tau2 run` options after the count. For example, this runs the first 10 airline tasks one
+at a time:
+
+```sh
+bun run tau3:first airline 10 --max-concurrency 1
+```
 
 | Variable               | Where           | Purpose                                                               |
 | ---------------------- | --------------- | --------------------------------------------------------------------- |
