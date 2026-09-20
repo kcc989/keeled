@@ -151,7 +151,7 @@ export interface RegisteredTool {
   invoke: (input: JsonValue, options: AgentToolExecutionOptions) => JsonValue | PromiseLike<JsonValue>;
 }
 
-const reservedPrefixes = ['respond:'] as const;
+const reservedPrefixes = ['respond:', '__keeled_'] as const;
 
 export function registerTools(tools: AgentToolSet): Map<string, RegisteredTool> {
   const registry = new Map<string, RegisteredTool>();

@@ -95,6 +95,7 @@ export type BlockerKind =
   | 'invalid_input'
   | 'duplicate'
   | 'unavailable'
+  | 'controller_error'
   | 'no_progress';
 
 export interface Blocker {
@@ -147,7 +148,10 @@ export interface AgentMetadata {
 export interface DecisionRecord {
   id: string;
   cycle: number;
-  action: { type: 'tool'; tool: string } | { type: 'respond'; outcome: 'completed' | 'needs_input' | 'blocked' };
+  action:
+    | { type: 'tool'; tool: string }
+    | { type: 'tool_call'; tool: string; input: JsonValue }
+    | { type: 'respond'; outcome: 'completed' | 'needs_input' | 'blocked' };
   rationale?: string;
   confidence?: number;
   probabilities?: Record<string, number>;
@@ -159,7 +163,7 @@ export interface BlockerRecord extends Blocker {}
 export interface TransitionRecord {
   id: string;
   cycle: number;
-  kind: 'cycle-start' | 'limit' | 'cancelled' | 'error' | 'finish' | 'policy-block' | 'authorized';
+  kind: 'cycle-start' | 'controller-error' | 'limit' | 'cancelled' | 'error' | 'finish' | 'policy-block' | 'authorized';
   detail?: string;
   stopReason?: StopReason;
 }
@@ -186,10 +190,13 @@ export interface GenerationTrace {
   structured: boolean;
   ms: number;
   status: 'success' | 'error';
+  provider?: string;
+  modelId?: string;
   inputTokens?: number;
   outputTokens?: number;
   reasoningTokens?: number;
   error?: string;
+  detail?: JsonValue;
 }
 
 export interface ModelCallOptions {
@@ -214,6 +221,25 @@ export interface GeneratedObjectResult<T> {
   text: string;
 }
 
+export interface ModelToolContract {
+  name: string;
+  description: string;
+  inputSchema: FlexibleSchema<any>;
+}
+
+export interface GeneratedToolCall {
+  tool: string;
+  input: unknown;
+  invalid?: boolean;
+  error?: string;
+}
+
+export interface GeneratedToolCallsResult {
+  calls: GeneratedToolCall[];
+  text: string;
+  finishReason: string;
+}
+
 export interface ManagedGeneration {
   generateText(options: ModelCallOptions): Promise<GeneratedTextResult>;
   generateObject<OBJECT>(
@@ -223,6 +249,9 @@ export interface ManagedGeneration {
       description?: string;
     },
   ): Promise<GeneratedObjectResult<OBJECT>>;
+  generateToolCalls(
+    options: ModelCallOptions & { tools: readonly ModelToolContract[] },
+  ): Promise<GeneratedToolCallsResult>;
 }
 
 export type PlainTool = Tool<any, any, any>;

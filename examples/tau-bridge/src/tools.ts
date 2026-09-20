@@ -50,28 +50,35 @@ export function bridgeTools(
   call: ToolCallHandler,
   argumentsModel?: LanguageModel,
   writeArgumentsModel?: LanguageModel,
+  inputMode: 'resolved' | 'joint' = 'resolved',
 ): AgentToolSet {
   const tools: AgentToolSet = {};
 
   for (const spec of specs) {
     const schema = jsonSchema(spec.parameters);
 
-    tools[spec.name] = agentTool({
+    const base = {
       description: describe(spec),
       inputSchema: schema,
       risk: spec.risk ?? 'unknown',
       repeat: spec.repeat ?? 'allow',
-      resolveInput: async (context) => {
-        const model = spec.risk === 'read' ? argumentsModel : (writeArgumentsModel ?? argumentsModel);
-
-        return resolveInput(spec, context, model);
-      },
       execute: (input, options) => {
         if (!isJsonValue(input)) throw new MissingInformation('Tool input is not JSON-serializable.');
 
         return call({ id: options.toolCallId, name: spec.name, arguments: input }, options.abortSignal);
       },
-    });
+    } satisfies Parameters<typeof agentTool>[0];
+
+    if (inputMode === 'joint') tools[spec.name] = agentTool(base);
+    else
+      tools[spec.name] = agentTool({
+        ...base,
+        resolveInput: async (context: AgentContext) => {
+          const model = spec.risk === 'read' ? argumentsModel : (writeArgumentsModel ?? argumentsModel);
+
+          return resolveInput(spec, context, model);
+        },
+      });
   }
 
   return tools;

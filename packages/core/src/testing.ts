@@ -97,6 +97,8 @@ export interface StubModelOptions {
   text?: string | ((prompt: string) => string);
   /** JSON returned for structured generation, keyed by call order. */
   objects?: unknown[];
+  /** Tool calls returned for model requests that expose tools, keyed by call order. */
+  toolCalls?: { toolName: string; input: unknown }[][];
 }
 
 /**
@@ -104,20 +106,36 @@ export interface StubModelOptions {
  */
 export function stubModel(options: StubModelOptions = {}): LanguageModel {
   let objectIndex = 0;
+  let toolCallIndex = 0;
 
   return new MockLanguageModelV3({
-    doGenerate: async ({ prompt, responseFormat }) => {
+    doGenerate: async ({ prompt, responseFormat, tools }) => {
       const wantsObject = responseFormat?.type === 'json';
+      const calls = tools === undefined ? undefined : options.toolCalls?.[toolCallIndex++];
 
-      const text = wantsObject
-        ? JSON.stringify(options.objects?.[objectIndex++] ?? {})
-        : isTextFactory(options.text)
-          ? options.text(JSON.stringify(prompt))
-          : (options.text ?? 'Done.');
+      const text =
+        calls === undefined
+          ? wantsObject
+            ? JSON.stringify(options.objects?.[objectIndex++] ?? {})
+            : isTextFactory(options.text)
+              ? options.text(JSON.stringify(prompt))
+              : (options.text ?? 'Done.')
+          : '';
 
       return {
-        content: [{ type: 'text' as const, text }],
-        finishReason: { unified: 'stop' as const, raw: 'stop' },
+        content:
+          calls === undefined
+            ? [{ type: 'text' as const, text }]
+            : calls.map((call, index) => ({
+                type: 'tool-call' as const,
+                toolCallId: `stub-call-${toolCallIndex}-${index}`,
+                toolName: call.toolName,
+                input: JSON.stringify(call.input),
+              })),
+        finishReason:
+          calls === undefined
+            ? { unified: 'stop' as const, raw: 'stop' }
+            : { unified: 'tool-calls' as const, raw: 'tool_calls' },
         usage: {
           inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
           outputTokens: { total: 1, text: 1, reasoning: 0 },

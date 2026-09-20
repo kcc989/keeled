@@ -4,9 +4,10 @@ Read this index before repeating or extending a controller experiment. Each reco
 must distinguish the hypothesis, tested implementation, measured results, and
 adoption decision. Keep failed runs and measurement limits visible.
 
-| Experiment                       | Status                                     | Result                                                                                            | Record                                                                                                         |
-| -------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| 3: One reasoning call at a stall | Rejected configuration; documentation only | 8/10 airline cases versus a saved 9/10 baseline; 24 recovery calls; three missed reference writes | [Design](recovery/README.md), [results and limitations](recovery/RESULTS.md), [metrics](recovery/summary.json) |
+| Experiment                         | Status                                     | Result                                                                                            | Record                                                                                                         |
+| ---------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| 3: One reasoning call at a stall   | Rejected configuration; documentation only | 8/10 airline cases versus a saved 9/10 baseline; 24 recovery calls; three missed reference writes | [Design](recovery/README.md), [results and limitations](recovery/RESULTS.md), [metrics](recovery/summary.json) |
+| Joint tool and argument generation | Keep opt-in; do not adopt as default       | 9/10 airline cases; one timeout; one duplicate write attempt; 36 rejected outputs                 | [Results and limitations](../docs/experiments/joint-tool-argument-generation.md)                               |
 
 Experiment numbers follow the original proposal. This index does not imply that
 Experiments 1 and 2 were run or combined in this checkout.

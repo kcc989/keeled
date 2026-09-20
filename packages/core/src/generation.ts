@@ -1,9 +1,13 @@
-import { Output, generateText } from 'ai';
+import { Output, generateText, jsonSchema, tool } from 'ai';
 import type { LanguageModel } from 'ai';
+import { z } from 'zod';
 import { HarnessError } from './errors.ts';
+import { isJsonValue, type JsonValue } from './json.ts';
 import type {
   GeneratedObjectResult,
   GeneratedTextResult,
+  GeneratedToolCall,
+  GeneratedToolCallsResult,
   ManagedGeneration,
   ModelCallOptions,
   UsageTotals,
@@ -52,12 +56,65 @@ export class GenerationHost implements ManagedGeneration {
     return { object: result.output, text: result.text };
   };
 
+  generateToolCalls = async (
+    options: ModelCallOptions & { tools: readonly import('./types.ts').ModelToolContract[] },
+  ): Promise<GeneratedToolCallsResult> => {
+    const { tools: contracts, ...rest } = options;
+
+    const tools = Object.fromEntries(
+      contracts.map((contract) => [
+        contract.name,
+        tool({
+          description: contract.description,
+          inputSchema: contract.inputSchema,
+          outputSchema: jsonSchema({}),
+        }),
+      ]),
+    );
+
+    const result = await this.#tracked(
+      rest,
+      true,
+      () => generateText({ ...this.#callOptions(rest), tools, toolChoice: 'required' }),
+      (generated) => ({
+        calls: generated.toolCalls.map((call) => ({
+          tool: call.toolName,
+          input: isJsonValue(call.input) ? call.input : null,
+        })),
+        finishReason: generated.finishReason,
+      }),
+    );
+
+    this.#account(result.totalUsage);
+
+    return {
+      calls: result.toolCalls.map((call) => {
+        const generated: GeneratedToolCall = { tool: call.toolName, input: call.input };
+
+        if ('invalid' in call && call.invalid === true) {
+          generated.invalid = true;
+          generated.error = call.error instanceof Error ? call.error.message : String(call.error);
+        }
+
+        return generated;
+      }),
+      text: result.text,
+      finishReason: result.finishReason,
+    };
+  };
+
   async #tracked<
     T extends {
       totalUsage: { inputTokens?: number; outputTokens?: number; outputTokenDetails?: { reasoningTokens?: number } };
     },
-  >(options: ModelCallOptions, structured: boolean, run: () => Promise<T>): Promise<T> {
+  >(
+    options: ModelCallOptions,
+    structured: boolean,
+    run: () => Promise<T>,
+    detail?: (result: T) => JsonValue,
+  ): Promise<T> {
     const start = performance.now();
+    const identity = modelIdentity(options.model ?? this.#options.defaultModel);
 
     const emit = (detail: Partial<import('./types.ts').GenerationTrace>) => {
       try {
@@ -66,6 +123,7 @@ export class GenerationHost implements ManagedGeneration {
           structured,
           ms: Math.round(performance.now() - start),
           status: 'success',
+          ...identity,
           ...detail,
         });
       } catch {
@@ -75,11 +133,13 @@ export class GenerationHost implements ManagedGeneration {
 
     try {
       mergeSignals(this.#options.abortSignal, options.abortSignal).throwIfAborted();
+      this.#options.usage.model.calls += 1;
       const result = await run();
       emit({
         inputTokens: result.totalUsage.inputTokens,
         outputTokens: result.totalUsage.outputTokens,
         reasoningTokens: result.totalUsage.outputTokenDetails?.reasoningTokens,
+        detail: detail?.(result),
       });
 
       return result;
@@ -112,10 +172,27 @@ export class GenerationHost implements ManagedGeneration {
 
   #account(usage: { inputTokens?: number | undefined; outputTokens?: number | undefined }): void {
     const bucket = this.#options.usage.model;
-    bucket.calls += 1;
     bucket.inputTokens += usage.inputTokens ?? 0;
     bucket.outputTokens += usage.outputTokens ?? 0;
   }
+}
+
+interface ModelIdentity {
+  provider?: string;
+  modelId?: string;
+}
+
+const modelIdentitySchema = z.union([
+  z.string().transform((modelId): ModelIdentity => ({ modelId })),
+  z
+    .object({ provider: z.string(), modelId: z.string() })
+    .transform(({ provider, modelId }): ModelIdentity => ({ provider, modelId })),
+]);
+
+function modelIdentity(model: LanguageModel): ModelIdentity {
+  const parsed = modelIdentitySchema.safeParse(model);
+
+  return parsed.success ? parsed.data : {};
 }
 
 export function mergeSignals(primary: AbortSignal, secondary: AbortSignal | undefined): AbortSignal {

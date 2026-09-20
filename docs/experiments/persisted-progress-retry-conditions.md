@@ -77,23 +77,23 @@ base, not to later changes on `main`.
 
 ## Results on matched saved runs
 
-| Metric | Baseline | Experiment |
-| --- | ---: | ---: |
-| Task successes | 16/19 | 15/19 |
-| Repeated-selection proxy | 198 | 6 |
-| Controller selection calls | 516 | 374 |
-| All Jev calls, including authorization | 542 | 386 |
-| Completion-model requests | 21 | 34 |
-| Generation attempts | 666 | 549 |
-| Failed generation attempts | 1 | 22 |
-| Blocked turns | 39 | 68 |
-| Missed reference writes | 3 | 4 |
-| Issued mutation arguments unmatched to reference writes | 0 | 0 |
-| Duplicate reference writes | 1 | 0 |
-| Median saved-run latency | 60.7 s | 58.0 s |
-| p90 saved-run latency | 161.5 s | 222.8 s |
-| Estimated agent cost per success | $0.0835 | $0.0605 |
-| Estimated cost per success, including user simulator | $0.1000 | $0.0830 |
+| Metric                                                  | Baseline | Experiment |
+| ------------------------------------------------------- | -------: | ---------: |
+| Task successes                                          |    16/19 |      15/19 |
+| Repeated-selection proxy                                |      198 |          6 |
+| Controller selection calls                              |      516 |        374 |
+| All Jev calls, including authorization                  |      542 |        386 |
+| Completion-model requests                               |       21 |         34 |
+| Generation attempts                                     |      666 |        549 |
+| Failed generation attempts                              |        1 |         22 |
+| Blocked turns                                           |       39 |         68 |
+| Missed reference writes                                 |        3 |          4 |
+| Issued mutation arguments unmatched to reference writes |        0 |          0 |
+| Duplicate reference writes                              |        1 |          0 |
+| Median saved-run latency                                |   60.7 s |     58.0 s |
+| p90 saved-run latency                                   |  161.5 s |    222.8 s |
+| Estimated agent cost per success                        |  $0.0835 |    $0.0605 |
+| Estimated cost per success, including user simulator    |  $0.1000 |    $0.0830 |
 
 The repeated-selection proxy counts the same controller action against unchanged
 latest user text and successful external-tool evidence. It does not fully capture

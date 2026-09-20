@@ -67,7 +67,9 @@ const execution = agent.stream({
 for await (const chunk of execution) {
   if (chunk.type === 'data-decision') {
     const action = chunk.data.action;
-    console.log(action.type === 'tool' ? `  decide  -> tool ${action.tool}` : `  decide  -> respond ${action.outcome}`);
+    console.log(
+      action.type === 'respond' ? `  decide  -> respond ${action.outcome}` : `  decide  -> tool ${action.tool}`,
+    );
   } else if (chunk.type === 'data-blocker') {
     console.log(`  blocked -> ${chunk.data.reason}`);
   } else if (chunk.type === 'tool-output-error') {

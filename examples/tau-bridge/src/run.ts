@@ -8,6 +8,7 @@
  */
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { runnerOptions } from './runner-options.ts';
 
 const [domain, ...rest] = Bun.argv.slice(2);
 
@@ -27,6 +28,8 @@ if (!(await Bun.file(tau2).exists())) {
 
 const port = process.env['KEELED_BRIDGE_PORT'] ?? '8787';
 
+const { controller, tauArgs } = runnerOptions(rest);
+
 const bridgeUrl = `http://localhost:${port}`;
 
 // Another run's bridge would pass the health check and then stop mid-run when that run ends.
@@ -41,7 +44,7 @@ if (
 }
 
 const bridge = Bun.spawn(['bun', 'run', join(import.meta.dir, 'server.ts')], {
-  env: { ...process.env, KEELED_BRIDGE_PORT: port },
+  env: { ...process.env, KEELED_BRIDGE_PORT: port, KEELED_CONTROLLER: controller },
   stdout: 'inherit',
   stderr: 'inherit',
 });
@@ -49,7 +52,7 @@ const bridge = Bun.spawn(['bun', 'run', join(import.meta.dir, 'server.ts')], {
 const code = await (async () => {
   if (!(await healthy(bridgeUrl, bridge))) return 1;
 
-  const args = ['run', '--domain', domain, ...defaults(rest), ...rest];
+  const args = ['run', '--domain', domain, ...defaults(tauArgs), ...tauArgs];
   console.log(`$ tau2 ${args.join(' ')}`);
 
   const run = Bun.spawn([tau2, ...args], {
