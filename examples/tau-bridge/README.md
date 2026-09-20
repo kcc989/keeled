@@ -49,22 +49,6 @@ Tool input and the final response are generated with the whole conversation in v
 (`resolveInput` and `respond` in `src/tools.ts`), because τ³ conversations span several
 turns. The bridge also supplies the benchmark tool catalog and risk-specific argument models.
 
-## Ready read calls
-
-The bridge uses the core `schemaReadCandidates` provider for all read tools. It projects
-exactly matching property names from a single observed object and validates the entire
-input schema. It never joins separate records, inherits parent fields, translates aliases,
-or interprets tool names. Incomplete and ambiguous relationships use normal input resolution.
-Candidates carry source references. Mutations and unknown-risk calls invalidate earlier
-sources; successful identical reads are omitted in the current turn. Candidate enumeration
-is bounded to 100 calls and depth 20; ordinary input resolution remains available.
-
-With `KEELED_OBSERVED_ARGUMENTS=1`, Jev runs only after the controller selects a read tool
-whose single required scalar argument still needs resolution. Judgments are cached by tool,
-argument, request, and source-evidence version. A selected source path is reused while its
-selected collection members are drained. Traces retain the evidence version, cache status,
-source path and confidence, selected observed options, and returned option.
-
 ## Endpoints
 
 | Method   | Path                 | Body                                | Returns |
@@ -89,16 +73,15 @@ bun run tau3 <domain> --task-ids 0 1 2 --max-concurrency 1
 checkout, and stops the bridge. Any other `tau2 run` option passes through. The domain is passed through without special handling. The default is **one trial per task**;
 keep screening runs at one trial until a promising change warrants a larger evaluation.
 
-| Variable                    | Where           | Purpose                                                                                                             |
-| --------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `TYPESAFE_API_KEY`          | Keeled `.env`   | Jev controller                                                                                                      |
-| `OPENROUTER_API_KEY`        | Keeled `.env`   | Keeled's model calls                                                                                                |
-| `KEELED_MODEL`              | Keeled `.env`   | OpenRouter model id, e.g. `anthropic/claude-sonnet-4.5`                                                             |
-| `KEELED_OBSERVED_ARGUMENTS` | optional        | Set to `1` to try Jev-selected, evidence-backed read arguments after the controller selects an unresolved read tool |
-| `OPENROUTER_PROVIDERS`      | optional        | Provider order, default `together,modal`; no fallback beyond the list                                               |
-| `OPENROUTER_API_KEY`        | τ³-bench `.env` | User simulator                                                                                                      |
-| `TAU2_USER_LLM`             | optional        | User simulator model, default `openrouter/openai/gpt-4.1`                                                           |
-| `TAU2_DIR`                  | optional        | τ³-bench checkout, default `~/projects/tau2-bench`                                                                  |
+| Variable               | Where           | Purpose                                                               |
+| ---------------------- | --------------- | --------------------------------------------------------------------- |
+| `TYPESAFE_API_KEY`     | Keeled `.env`   | Jev controller                                                        |
+| `OPENROUTER_API_KEY`   | Keeled `.env`   | Keeled's model calls                                                  |
+| `KEELED_MODEL`         | Keeled `.env`   | OpenRouter model id, e.g. `anthropic/claude-sonnet-4.5`               |
+| `OPENROUTER_PROVIDERS` | optional        | Provider order, default `together,modal`; no fallback beyond the list |
+| `OPENROUTER_API_KEY`   | τ³-bench `.env` | User simulator                                                        |
+| `TAU2_USER_LLM`        | optional        | User simulator model, default `openrouter/openai/gpt-4.1`             |
+| `TAU2_DIR`             | optional        | τ³-bench checkout, default `~/projects/tau2-bench`                    |
 
 The two key sets stay separate. τ³-bench never overrides variables already in its
 environment, so the runner withholds Keeled's credentials from it and it reads only its
@@ -117,10 +100,9 @@ strict mode rejects.
 
 ## Historical measurements
 
-The earlier candidate experiment used a domain-specific adapter. That adapter has been
-removed. Its saved results do not establish the performance of the general framework or
-the new schema-based candidate provider. Raw historical run artifacts remain unchanged.
-No new benchmark was run for this replacement.
+Earlier candidate and observed-argument experiments have been removed. Their saved results
+do not establish the performance of the current harness. Raw historical run artifacts
+remain unchanged.
 
 ## Generic harness changes after the snapshot
 

@@ -50,6 +50,7 @@ describe('registerTools', () => {
   test('rejects reserved names', () => {
     expect(() => registerTools({ 'respond:completed': search })).toThrow(/reserved/);
     expect(registerTools({ 'step:complete': search }).has('step:complete')).toBe(true);
+    expect(registerTools({ 'call:external': search }).has('call:external')).toBe(true);
   });
 
   test('rejects provider-executed tools', () => {

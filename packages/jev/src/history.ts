@@ -1,13 +1,9 @@
 import {
   callHistory as coreCallHistory,
-  candidatesFor,
-  factIndex,
-  type AvailableTool,
   type Blocker,
   type CallRecord,
   type ControllerContext,
   type JsonValue,
-  jsonObject,
   jsonString,
   stableHash,
 } from '@keeled/core';
@@ -93,52 +89,4 @@ export function respondNotes(blockers: readonly Blocker[]): RespondNotes {
 
 function same(left: JsonValue, right: JsonValue): boolean {
   return stableHash(left) === stableHash(right);
-}
-
-const shownValues = 4;
-
-const shownLabel = 60;
-
-/**
- * What a tool could be called with right now: for each required parameter, the known values
- * of its kind, and which of them this tool already used this turn. A tool whose parameters
- * have no known value, or only values already used, is unlikely to make progress, so this
- * lets the choice reflect it instead of discovering it after input resolution.
- */
-export function readinessNote(tool: AvailableTool, context: ControllerContext, history: readonly CallRecord[]): string {
-  if (tool.required.length === 0) return '';
-
-  const statements = context.conversation
-    .filter((message) => message.role === 'user')
-    .flatMap((message) =>
-      // SAFETY: the adjacent validation or framework contract establishes the asserted type.
-      message.parts.filter((part) => part.type === 'text').map((part) => ({ text: (part as { text: string }).text })),
-    );
-
-  const facts = factIndex(history, statements);
-
-  const used = history.filter(
-    (call) => call.turn === 'current' && call.tool === tool.name && call.outcome === 'result',
-  );
-
-  const parts = tool.required.map((parameter) => {
-    const candidates = candidatesFor(parameter, facts).slice(0, shownValues);
-
-    if (candidates.length === 0) return `no known value yet for ${parameter}`;
-
-    const values = candidates.map((fact) => {
-      const already = used.some(
-        // SAFETY: the adjacent validation or framework contract establishes the asserted type.
-        (call) => String(jsonObject(call.input)?.[parameter]) === String(fact.value),
-      );
-
-      const label = fact.label.length <= shownLabel ? fact.label : `${fact.label.slice(0, shownLabel)}…`;
-
-      return `${fact.value} (${label}${already ? '; already used this turn' : ''})`;
-    });
-
-    return `${parameter}: ${values.join(', ')}`;
-  });
-
-  return ` Known values: ${parts.join('; ')}.`;
 }

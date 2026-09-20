@@ -7,10 +7,8 @@ export interface AvailableTool {
   risk: Risk;
   /** Names of the input's required top-level parameters, so a controller can judge readiness. */
   required: string[];
-  /** Ordinary argument resolution is suspended until evidence changes; ready calls remain usable. */
+  /** Ordinary argument resolution is suspended until evidence changes. */
   resolutionBlocked?: string;
-  /** Ready calls in the current decision snapshot; the runtime owns their inputs. */
-  candidates?: readonly { id: string; input: JsonValue; description: string; sources: readonly string[] }[];
 }
 
 export interface BudgetView {
@@ -39,7 +37,6 @@ export type NextAction<Name extends string = string> =
   | {
       type: 'tool';
       tool: Name;
-      candidateId?: string;
     }
   | { type: 'respond'; outcome: 'completed' | 'needs_input' | 'blocked' };
 

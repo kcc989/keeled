@@ -57,17 +57,6 @@ export type AgentAvailability = (context: AgentContext) => boolean | PromiseLike
  */
 export type RepeatPolicy = 'allow' | 'reuse' | 'poll';
 
-/** A complete, evidence-backed input offered for controller selection. */
-export interface CallCandidate<INPUT = JsonValue> {
-  input: INPUT;
-  description: string;
-  sources: readonly string[];
-}
-
-export type CandidateProvider<INPUT = JsonValue> = (
-  context: AgentContext,
-) => readonly CallCandidate<INPUT>[] | PromiseLike<readonly CallCandidate<INPUT>[]>;
-
 export interface AgentToolSpec<SCHEMA extends FlexibleSchema<any>, OUTPUT> {
   description: string;
   inputSchema: SCHEMA;
@@ -79,8 +68,6 @@ export interface AgentToolSpec<SCHEMA extends FlexibleSchema<any>, OUTPUT> {
   pollTimeoutMs?: number;
   model?: LanguageModel;
   available?: AgentAvailability;
-  /** Optional ready-call builder. Only read tools may offer candidates. */
-  candidates?: CandidateProvider<InferSchema<SCHEMA>>;
   /** Optional application evidence version for argument resolution. User-turn changes always invalidate it. */
   resolutionKey?: (context: AgentContext) => string;
   inspect?: (input: InferSchema<SCHEMA>, context: AgentContext) => InputInspection | PromiseLike<InputInspection>;
@@ -95,7 +82,6 @@ export interface AgentToolExtensions<INPUT, OUTPUT> {
   readonly pollTimeoutMs?: number;
   readonly model?: LanguageModel;
   readonly available?: AgentAvailability;
-  readonly candidates?: CandidateProvider<INPUT>;
   readonly resolutionKey?: (context: AgentContext) => string;
   readonly inspect?: (input: INPUT, context: AgentContext) => InputInspection | PromiseLike<InputInspection>;
   readonly resolveInput?: (context: AgentContext) => INPUT | PromiseLike<INPUT>;
@@ -159,14 +145,13 @@ export interface RegisteredTool {
   model?: LanguageModel;
   kind: 'agent' | 'sdk';
   available?: AgentAvailability;
-  candidates?: CandidateProvider;
   resolutionKey?: (context: AgentContext) => string;
   inspect?: (input: JsonValue, context: AgentContext) => InputInspection | PromiseLike<InputInspection>;
   resolveInput?: (context: AgentContext) => JsonValue | PromiseLike<JsonValue>;
   invoke: (input: JsonValue, options: AgentToolExecutionOptions) => JsonValue | PromiseLike<JsonValue>;
 }
 
-const reservedPrefixes = ['respond:', 'call:'] as const;
+const reservedPrefixes = ['respond:'] as const;
 
 export function registerTools(tools: AgentToolSet): Map<string, RegisteredTool> {
   const registry = new Map<string, RegisteredTool>();
@@ -226,7 +211,6 @@ function register(name: string, tool: AnyAgentTool | Tool<any, any, any>): Regis
       model: tool.model,
       kind: 'agent',
       available: tool.available,
-      candidates: tool.candidates,
       resolutionKey: tool.resolutionKey,
       inspect: tool.inspect,
       resolveInput: tool.resolveInput,

@@ -90,7 +90,6 @@ const editFile = agentTool({
 | Field                   | Behavior                                                                                                                                                                                                                                                                                                                           |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `available(context)`    | Excludes the tool from selection when false.                                                                                                                                                                                                                                                                                       |
-| `candidates(context)`   | Optional complete read-call inputs, each with a description and source references. Jev can select one without generating arguments.                                                                                                                                                                                                |
 | `resolveInput(context)` | Produces the typed input. Without it, the runtime generates input from the schema.                                                                                                                                                                                                                                                 |
 | `risk`                  | `read`, `write`, `destructive`, or, when unspecified, `unknown`.                                                                                                                                                                                                                                                                   |
 | `repeat`                | `allow` (default) runs every call. `reuse` declares that a result stays valid until a state-changing call succeeds, so an identical repeat before then is declined. `poll` exempts repetition from progress checks for `pollTimeoutMs` (default 60 seconds). Never use `reuse` for polling or data that changes outside the agent. |
@@ -108,16 +107,7 @@ agent context.
 
 ## Loop
 
-Read tools can return `{ input, description, sources }` entries from `candidates(context)`.
-Build these from explicit relationships in observed records, preserving related arguments
-such as document ID and version. The runtime validates and stores a snapshot
-before each decision. Jev returns a candidate ID; the runtime executes its stored input
-through the normal policy and authorization checks. IDs from older snapshots in the current turn are rejected.
-Tools remain selectable through ordinary input resolution when no ready call fits.
-Candidate providers own freshness and repeat filtering. Only complete calls are offered;
-missing arguments still use the normal resolver. The `call:` tool-name prefix is reserved.
-
-Each cycle calls `controller.control()` once. Jev selects a ready call, a registered tool,
+Each cycle calls `controller.control()` once. Jev selects a registered tool,
 `respond:completed`, `respond:needs_input`, or `respond:blocked`.
 A reply selection ends the loop and generates one response.
 
@@ -287,7 +277,6 @@ be wrong. Applications can supply their own `TaskTracker`; permission checks als
 Unavailable tools remain in `ControllerContext.toolCatalog`, with availability marked.
 After argument resolution fails, another attempt waits for different successful evidence.
 A tool may supply `resolutionKey(context)` to declare the relevant dependency revision.
-Ready calls with validated arguments remain selectable while ordinary resolution waits.
 
 `evidenceCalculationTool()` performs exact decimal sums, differences, products, and
 comparisons using values referenced in successful stored tool results. Large values must
@@ -299,13 +288,6 @@ before storage cannot be recovered.
 Such callbacks may continue outside the loop; uncertain writes remain quarantined.
 Timeouts are errors, not user cancellation. Every terminal response has nonempty text.
 
-`schemaReadCandidates(tool, catalog)` provides generic ready reads from observed records.
-It copies exact schema property names from one object and validates the complete input;
-it does not infer aliases or relationships between records. The bridge uses this core
-provider for every read tool without domain-specific tool mappings. Unsupported schemas
-or incomplete records use normal argument resolution. Matching fields propose a call;
-they do not prove that the call is appropriate or authorized.
-
 Generation diagnostics are available through `onGeneration`: purpose, duration, status,
 input/output/reasoning tokens, and errors. Built-in purposes distinguish task extraction,
 completion verification, tool input, permission verification, and final responses. Diagnostics
@@ -314,10 +296,3 @@ do not change execution if the observer throws. The bridge saves these in each t
 extraction while keeping the default model for completion verification. The bridge uses
 its existing fast argument model for this extraction. Evidence reads normalize page defaults
 and reject identical repeats within a turn; different pages remain available.
-
-## Focused argument benchmark
-
-Run `bun run microbench --mode candidates` for offline field-matching coverage, or
-`bun run microbench --mode resolver` for live argument resolution without the full
-conversation benchmark. Use `--case collection-ids,root-ref` to isolate a failure and
-`--trials 3` to sample variability. See [microbench instructions](examples/tau-bridge/src/microbench/README.md).

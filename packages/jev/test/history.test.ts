@@ -11,7 +11,7 @@ import {
   type JsonObject,
 } from '@keeled/core';
 import { jev } from '../src/controller.ts';
-import { blockerNote, callHistory, readinessNote, repetitionNote, respondNotes } from '../src/history.ts';
+import { blockerNote, callHistory, repetitionNote, respondNotes } from '../src/history.ts';
 import { controllerState } from '../src/state.ts';
 import { testFixture } from '@keeled/core/testing';
 
@@ -315,69 +315,4 @@ describe('authorization', () => {
       ' An action awaits the user\'s explicit confirmation: cancel({"id":"X"}). Asking the user to confirm it resolves this.',
     );
   });
-});
-
-describe('readiness', () => {
-  const lookup = {
-    name: 'get_document_details',
-    description: 'Look up.',
-    risk: 'read' as const,
-    required: ['document_id'],
-  };
-
-  const user = { user_id: 'u1', documents: ['M05KNL', 'UHDAHF'] };
-
-  test('known values are listed, with those already used this turn marked', () => {
-    const history = callHistory(
-      context([
-        call('get_user_details', { user_id: 'u1' }, user, 'c1'),
-        call('get_document_details', { document_id: 'M05KNL' }, { document_id: 'M05KNL', workspace: 'OPS' }, 'c2'),
-      ]),
-    );
-
-    const note = readinessNote(lookup, context([]), history);
-    expect(note).toContain('document_id: M05KNL (workspace=OPS; already used this turn)');
-    expect(note).toContain('UHDAHF (one of documents returned by get_user_details)');
-  });
-
-  test('a parameter with no known value says so', () => {
-    expect(readinessNote(lookup, context([]), [])).toBe(' Known values: no known value yet for document_id.');
-  });
-});
-
-test('Jev selects a complete call by ID and keeps tool resolution as a fallback', async () => {
-  let sent: JsonValue;
-
-  // SAFETY: the test fixture intentionally models this exact compile-time shape.
-  const client = testFixture<TypeSafeClient>({
-    async systemOne(request: JsonValue) {
-      sent = request;
-
-      return {
-        answers: { action: { choice: 'call:1:0', confidence: 0.9, probabilities: {} } },
-        usage: { input_tokens: 0, output_tokens: 0 },
-      };
-    },
-  });
-
-  const state = context([]);
-
-  const decision = await jev({ client }).control({
-    ...state,
-    availableTools: [
-      {
-        name: 'lookup',
-        description: 'Read a document.',
-        risk: 'read',
-        required: ['id'],
-        candidates: [{ id: 'call:1:0', input: { id: 'R1' }, description: 'User document', sources: ['c1'] }],
-      },
-    ],
-  });
-
-  expect(decision.action).toEqual({ type: 'tool', tool: 'lookup', candidateId: 'call:1:0' });
-  const text = JSON.stringify(sent);
-  expect(text).toContain('call:1:0');
-  expect(text).toContain('R1');
-  expect(text).toContain('fallback only');
 });

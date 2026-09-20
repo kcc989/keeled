@@ -12,9 +12,6 @@ import {
   type ControllerContext,
   type ControllerDecision,
   type NextAction,
-  type ObservedArgumentJudge,
-  type ObservedArgumentQuery,
-  type ObservedResolutionTrace,
   type PendingAction,
   type StopReason,
   type UsageTotals,
@@ -31,7 +28,7 @@ export interface DecisionLog {
 }
 
 export interface TraceEntry {
-  kind: 'control' | 'authorize' | 'generate' | 'observed-arguments';
+  kind: 'control' | 'authorize' | 'generate';
   ms: number;
   detail?: unknown;
 }
@@ -69,8 +66,6 @@ export interface SessionOptions {
   argumentsModel?: LanguageModel;
   /** Model used for state-changing tool arguments. Defaults to `argumentsModel`. */
   writeArgumentsModel?: LanguageModel;
-  /** Optional semantic adapter for turn-local, evidence-backed read arguments. */
-  observedArgumentJudge?: ObservedArgumentJudge;
   policy?: AgentPolicy;
 }
 
@@ -94,39 +89,6 @@ export class Session {
   constructor(options: SessionOptions) {
     this.#messages = (options.history ?? []).map((entry) => textMessage(entry.role, entry.text));
     const trace = (entry: TraceEntry) => this.#trace.push(entry);
-    const judgmentMs = new WeakMap<ObservedArgumentQuery, number>();
-
-    const observedArgumentJudge: ObservedArgumentJudge | undefined =
-      options.observedArgumentJudge === undefined
-        ? undefined
-        : async (query, context) => {
-            const started = performance.now();
-            const result = await options.observedArgumentJudge!(query, context);
-            judgmentMs.set(query, Math.round(performance.now() - started));
-
-            return result;
-          };
-
-    const observedResolution = (resolution: ObservedResolutionTrace) =>
-      trace({
-        kind: 'observed-arguments',
-        ms: judgmentMs.get(resolution.query) ?? 0,
-        detail: {
-          tool: resolution.query.tool.name,
-          argument: resolution.query.argument.name,
-          evidenceVersion: resolution.evidenceVersion,
-          cacheHit: resolution.cacheHit,
-          sourcePath: resolution.sourcePath ?? null,
-          sourceConfidence: resolution.sourceConfidence ?? null,
-          selectedOptions: resolution.selectedOptions.map((option) => ({
-            id: option.id,
-            value: option.value,
-            path: option.path,
-            source: option.source,
-          })),
-          returnedOption: resolution.returnedOption?.id ?? null,
-        },
-      });
 
     this.#agent = createAgent({
       instructions: options.instructions,
@@ -141,8 +103,6 @@ export class Session {
           (call, signal) => this.#requestTool(call, signal),
           options.argumentsModel === undefined ? undefined : options.argumentsModel,
           options.writeArgumentsModel === undefined ? undefined : options.writeArgumentsModel,
-          observedArgumentJudge,
-          observedResolution,
         ),
         evidence: evidenceTool(),
         arithmetic: evidenceCalculationTool(),
