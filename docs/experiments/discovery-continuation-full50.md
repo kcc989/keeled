@@ -140,6 +140,7 @@ receipts, and report formatting. It adds no benchmark-specific runtime behavior.
 One trial per task and overlapping development tasks limit generalization.
 
 [Earlier screen, implementation, and preserved setup failures](discovery-continuation.md).
-[Compact full-run metrics and audit](discovery-continuation-full50-metrics.json).
 Raw results: `/Users/caseycollins/projects/tau2-bench/data/simulations/keeled_discovery_continuation_full50_20260920/results.json`.
-Raw traces remain local artifacts; the compact metrics are the durable record.
+Raw traces and detailed per-task metrics remain local artifacts. This report preserves
+the aggregate measurements and write audit; the large JSON export is not retained
+in the documentation diff. The original export remains in archive commit `f4d120b`.

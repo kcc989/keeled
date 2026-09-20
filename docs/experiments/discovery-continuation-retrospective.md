@@ -304,7 +304,9 @@ not airline-specific patches. This record does not authorize or propose another 
 - [First screen and setup failures](discovery-continuation.md)
 - [First-screen compact metrics](discovery-continuation-metrics.json)
 - [Full fifty-task report](discovery-continuation-full50.md)
-- [Full-run compact metrics and audit](discovery-continuation-full50-metrics.json)
+- Detailed full-run metrics remain in the local Tau result file and archive commit
+  `f4d120b`. The large JSON export was removed from the final documentation diff;
+  the full-run report preserves the aggregate results and write audit.
 - Raw runs remain under `/Users/caseycollins/projects/tau2-bench/data/simulations/`,
   using the four run names above and their `results.json` files.
 
