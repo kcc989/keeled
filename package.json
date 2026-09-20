@@ -16,7 +16,8 @@
     "test": "bun test",
     "demo": "bun run examples/chat/src/demo.ts",
     "check": "bun run quality && bun run typecheck && bun test",
-    "tau3": "bun run examples/tau-bridge/src/run.ts"
+    "tau3": "bun run examples/tau-bridge/src/run.ts",
+    "tau3:first": "bun run examples/tau-bridge/src/run-first.ts"
   },
   "devDependencies": {
     "@oxlint/plugins": "1.83.0",
