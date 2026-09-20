@@ -9,7 +9,7 @@ import type {
 } from './types.ts';
 import type { JsonValue } from './json.ts';
 
-export const reducerVersion = 5;
+export const reducerVersion = 4;
 
 export function emptyState(): ExecutionState {
   return {
@@ -17,7 +17,6 @@ export function emptyState(): ExecutionState {
     task: emptyTask(),
     uncertainOperations: [],
     inspections: [],
-    discovery: [],
     cycle: 0,
     stepsUsed: 0,
     observations: [],
@@ -74,15 +73,6 @@ interface ReduceContext {
 
 function applyPart(state: ExecutionState, part: AgentMessage['parts'][number], context: ReduceContext): void {
   const type = part.type;
-
-  if (part.type === 'data-discovery') {
-    const index = state.discovery.findIndex((record) => record.id === part.data.id);
-
-    if (index === -1) state.discovery.push(structuredClone(part.data));
-    else state.discovery[index] = structuredClone(part.data);
-
-    return;
-  }
 
   if (part.type === 'data-inspection') {
     state.inspections.push(structuredClone(part.data));

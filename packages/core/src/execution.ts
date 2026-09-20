@@ -1,4 +1,3 @@
-import { DiscoveryRun } from './discovery.ts';
 import { abortable } from './async.ts';
 import { validateInput } from './validation.ts';
 import { applyTaskPatch } from './task.ts';
@@ -200,7 +199,6 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
   readonly #policy: ResolvedPolicy;
   readonly #turn: Turn;
   readonly #generation: GenerationHost;
-  readonly #discovery: DiscoveryRun | undefined;
   readonly #abort: AbortController;
   readonly #usage: UsageTotals;
   readonly #request: string;
@@ -271,23 +269,6 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       abortSignal: this.#abort.signal,
       timeoutMs: this.#policy.generationTimeoutMs,
     });
-
-    if (definition.discovery?.enabled) {
-      this.#discovery = new DiscoveryRun(
-        definition.discovery,
-        definition.registry,
-        definition.controller,
-        (options) =>
-          this.#generation.generateObject({ ...options, model: definition.argumentsModel ?? definition.model }),
-        (record) => this.#turn.recordDiscovery(record),
-        (usage) => {
-          this.#usage.controller.calls += usage.calls;
-          this.#usage.controller.inputTokens += usage.inputTokens;
-          this.#usage.controller.outputTokens += usage.outputTokens;
-        },
-        (detail) => this.#turn.recordTransition('discovery', detail),
-      );
-    }
   }
 
   async execute(): Promise<void> {
@@ -333,17 +314,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
           let control;
 
           try {
-            if (this.#discovery !== undefined) {
-              try {
-                control = await abortable(this.#abort.signal, () => this.#discovery!.next(context));
-              } catch (error) {
-                if (this.#turn.isAborted() || isAbortError(error)) throw error;
-                this.#discovery.stop(`Discovery failed: ${errorMessage(error)}`);
-                this.#turn.recordTransition('discovery-error', errorMessage(error));
-              }
-            }
-
-            control ??= await abortable(this.#abort.signal, () => this.#definition.controller.control(context));
+            control = await abortable(this.#abort.signal, () => this.#definition.controller.control(context));
           } catch (error) {
             if (this.#turn.isAborted() || isAbortError(error)) throw error;
 
@@ -391,22 +362,6 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
           }
 
           await this.#callTool(action, { selectedFrom: context });
-
-          if (this.#discovery !== undefined) {
-            try {
-              await abortable(this.#abort.signal, () =>
-                this.#discovery!.observe({
-                  ...context,
-                  observations: this.#turn.state.observations,
-                  state: this.#turn.state,
-                }),
-              );
-            } catch (error) {
-              if (this.#turn.isAborted() || isAbortError(error)) throw error;
-              this.#discovery.stop(`Record check failed: ${errorMessage(error)}`);
-              this.#turn.recordTransition('discovery-error', errorMessage(error));
-            }
-          }
         }
 
         // The first report at one evidence state is feedback. Repeating without any new
@@ -441,8 +396,6 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       outcome = this.#callerSignal?.aborted === true ? 'cancelled' : 'error';
       this.#turn.recordRuntimeError(error);
     }
-
-    this.#discovery?.stop(`Turn ended: ${outcome}.`);
 
     try {
       await this.#finish(outcome);
@@ -959,7 +912,6 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
         `Tool calls:\n${JSON.stringify(callHistory(context.conversation, context.state.observations).map((call) => ({ ...call, result: presentResult(call.result, call.ref) })))}`,
         `Evidence:\n${digestObservations(context.state.observations)}`,
         `Retained goals and constraints:\n${JSON.stringify(context.state.task)}`,
-        `Discovery judgments and coverage (not execution permission):\n${JSON.stringify(context.state.discovery)}`,
         `Application inspections:\n${JSON.stringify(context.state.inspections)}`,
       ]
         .filter((line) => line.length > 0)
@@ -1235,7 +1187,6 @@ const defaultRespond: RespondAdapter = async (context) => {
       `Tool calls:\n${JSON.stringify(callHistory(context.conversation, context.state.observations).map((call) => ({ ...call, result: presentResult(call.result, call.ref) })))}`,
       `Evidence:\n${digestObservations(context.state.observations)}`,
       `Retained goals and constraints:\n${JSON.stringify(context.state.task)}`,
-      `Discovery judgments and coverage (not execution permission):\n${JSON.stringify(context.state.discovery)}`,
       `Application inspections:\n${JSON.stringify(context.state.inspections)}`,
       context.state.blockers.length === 0
         ? ''

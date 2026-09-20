@@ -1,4 +1,3 @@
-import type { DiscoveryRecord } from './discovery.ts';
 import type { UncertainOperation } from './types.ts';
 import type { TaskContract } from './task.ts';
 import type { InferUIMessageChunk, UIMessageStreamWriterWithOutcome } from 'ai';
@@ -120,10 +119,6 @@ export class Turn {
       abortSignal: this.#options.abortSignal,
       generateToolCalls,
     };
-  }
-
-  recordDiscovery(record: DiscoveryRecord): void {
-    this.#record({ type: 'data-discovery', data: structuredClone(record) });
   }
 
   recordInspection(inspection: InspectionRecord): void {
@@ -356,7 +351,6 @@ export class Turn {
 /** Mirrors the SDK's chunk-to-part assembly for the parts this runtime writes. */
 function toPart(chunk: Chunk, parts: AgentMessage['parts']): AgentMessage['parts'][number] | undefined {
   switch (chunk.type) {
-    case 'data-discovery':
     case 'data-inspection':
     case 'data-operation':
     case 'data-task':

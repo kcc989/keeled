@@ -11,7 +11,6 @@ export function controllerState(context: ControllerContext): { [key: string]: Js
   return sdkValue<{ [key: string]: JsonValue }>({
     latest_user_message: context.request,
     task: context.state.task,
-    discovery_judgments: context.state.discovery,
     application_inspections: context.state.inspections,
     tool_catalog: context.toolCatalog ?? context.availableTools,
     uncertain_operations: context.state.uncertainOperations,

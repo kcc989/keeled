@@ -1,4 +1,3 @@
-import type { DiscoveryEvaluation, DiscoveryQuestion } from './discovery.ts';
 import type {
   AgentMessage,
   Blocker,
@@ -112,7 +111,6 @@ export interface Controller {
    * Judges a pending call before it runs, for risks listed in `policy.authorization.risks`.
    * A controller without it authorizes nothing, and those calls run as before.
    */
-  evaluateDiscovery?(question: DiscoveryQuestion, signal: AbortSignal): Promise<DiscoveryEvaluation>;
   authorize?(context: ControllerContext, action: PendingAction): Promise<Authorization>;
 }
 

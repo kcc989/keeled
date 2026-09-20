@@ -1,5 +1,8 @@
 # Bounded discovery continuation: full 50 airline tasks
 
+> Retired after evaluation: the user rejected this implementation for merge and its code was removed.
+> This report preserves the assessment at run time. See the [complete experiment record](discovery-continuation-retrospective.md).
+
 Date: 2026-09-20. Decision: **keep experimental and opt-in; do not adopt as default**.
 
 The unchanged candidate passed **34/50 tasks (68%)**. It made useful read sequences,

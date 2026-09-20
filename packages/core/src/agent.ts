@@ -1,4 +1,3 @@
-import type { DiscoveryOptions } from './discovery.ts';
 import type { TaskTracker } from './task.ts';
 import type { LanguageModel } from 'ai';
 import { ConfigurationError } from './errors.ts';
@@ -9,7 +8,6 @@ import type { AgentMessage, AgentPolicy, AgentResult, ResolvedPolicy, Risk } fro
 
 export interface AgentConfig<TOOLS extends AgentToolSet> {
   instructions: string;
-  discovery?: DiscoveryOptions;
   taskTracker?: TaskTracker;
   onGeneration?: (trace: import('./types.ts').GenerationTrace) => void;
   controller: Controller;
@@ -29,7 +27,6 @@ export interface RunOptions {
 
 export interface AgentDefinition<TOOLS extends AgentToolSet> {
   instructions: string;
-  discovery?: DiscoveryOptions;
   taskTracker?: TaskTracker;
   onGeneration?: (trace: import('./types.ts').GenerationTrace) => void;
   controller: Controller;
@@ -51,14 +48,6 @@ export function compileDefinition<TOOLS extends AgentToolSet>(config: AgentConfi
   }
 
   const registry = registerTools(config.tools);
-
-  if (config.discovery?.enabled) {
-    if (!Number.isInteger(config.discovery.maxCalls ?? 8) || (config.discovery.maxCalls ?? 8) < 1)
-      throw new ConfigurationError('discovery.maxCalls must be a positive integer.');
-
-    if (config.controller.evaluateDiscovery === undefined)
-      throw new ConfigurationError('Discovery requires a controller with evaluateDiscovery.');
-  }
 
   if (config.controller.inputMode === 'joint') {
     const customResolvers = [...registry.values()].filter((tool) => tool.resolveInput !== undefined);
@@ -107,7 +96,6 @@ export function compileDefinition<TOOLS extends AgentToolSet>(config: AgentConfi
 
   return {
     instructions: config.instructions,
-    discovery: config.discovery,
     taskTracker: config.taskTracker,
     onGeneration: config.onGeneration,
     controller: config.controller,

@@ -1,5 +1,8 @@
 # Bounded discovery continuation: first screen
 
+> Retired after evaluation: the user rejected this implementation for merge and its code was removed.
+> This report preserves the assessment at run time. See the [complete experiment record](discovery-continuation-retrospective.md).
+
 Date: 2026-09-20. Decision: **keep experimental and opt-in; do not adopt as default**.
 
 The final candidate passed **9/10 airline tasks**, versus **8/10** in the saved

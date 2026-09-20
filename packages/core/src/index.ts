@@ -124,5 +124,3 @@ export type { JsonObject, JsonPrimitive, JsonValue } from './json.ts';
 export { isJsonValue, jsonNumber, jsonObject, jsonString } from './json.ts';
 
 export { stableHash } from './ids.ts';
-
-export type { DiscoveryOptions, DiscoveryQuestion, DiscoveryEvaluation, DiscoveryRecord } from './discovery.ts';

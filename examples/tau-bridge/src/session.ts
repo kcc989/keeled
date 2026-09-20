@@ -28,7 +28,7 @@ export interface DecisionLog {
 }
 
 export interface TraceEntry {
-  kind: 'control' | 'authorize' | 'generate' | 'discovery';
+  kind: 'control' | 'authorize' | 'generate';
   ms: number;
   detail?: unknown;
 }
@@ -55,7 +55,6 @@ export interface ToolResult {
 }
 
 export interface SessionOptions {
-  discovery?: import('@keeled/core').DiscoveryOptions;
   instructions: string;
   tools: ToolSpec[];
   history?: { role: 'user' | 'assistant'; text: string }[];
@@ -95,12 +94,10 @@ export class Session {
 
     this.#agent = createAgent({
       instructions: options.instructions,
-      discovery: options.discovery,
       taskTracker:
         options.trackTasks === false ? undefined : modelTaskTracker({ extractionModel: options.argumentsModel }),
       controller: observe(options.controller, trace, (decision) => this.#decisions.push(logOf(decision))),
       model: options.model,
-      argumentsModel: options.argumentsModel,
       onGeneration: (entry) => trace({ kind: 'generate', ms: entry.ms, detail: entry }),
       tools: {
         ...bridgeTools(
@@ -133,20 +130,6 @@ export class Session {
       (result) => {
         this.#messages = result.messages;
         this.#running = false;
-
-        if (this.#agent.definition.discovery?.enabled) {
-          const transitions =
-            result.messages
-              .at(-1)
-              ?.parts.filter(
-                (part) =>
-                  part.type === 'data-transition' &&
-                  (part.data.kind === 'discovery' || part.data.kind === 'discovery-error'),
-              ) ?? [];
-
-          this.#trace.push({ kind: 'discovery', ms: 0, detail: { records: result.state.discovery, transitions } });
-        }
-
         this.#emit({
           type: 'message',
           text: result.text.trim() || `The turn ended with status ${result.stopReason}; no response text was produced.`,
@@ -262,21 +245,6 @@ function observe(
       });
 
       return answer;
-    };
-
-  if (controller.evaluateDiscovery !== undefined)
-    observed.evaluateDiscovery = async (question, signal) => {
-      const started = performance.now();
-
-      try {
-        const answer = await controller.evaluateDiscovery!(question, signal);
-        trace({ kind: 'discovery', ms: Math.round(performance.now() - started), detail: { question, answer } });
-
-        return answer;
-      } catch (error) {
-        trace({ kind: 'discovery', ms: Math.round(performance.now() - started), detail: { error: String(error) } });
-        throw error;
-      }
     };
 
   return observed;

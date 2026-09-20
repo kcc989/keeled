@@ -128,16 +128,3 @@ the tracker with `trackTasks: false`. The framework has no domain-specific polic
 The stock server runs with the same generic instruction, evidence, and confirmation checks
 as any other host. There is no domain adapter or host access callback. Model permission
 checks do not establish authenticated identity.
-
-### Bounded discovery experiment
-
-Enable the core discovery option with the existing tool contracts:
-
-```bash
-KEELED_DISCOVERY=1 KEELED_JEV_MODEL=jev-1.13.0 bun run tau3:first airline 10
-```
-
-The bridge uses `discovery: { enabled: true, maxCalls: 8 }`. `KEELED_JEV_MODEL`
-optionally pins Jev. Use the default Jev controller for this experiment. Each semantic
-check records its latency, result, resolved model, and usage; completed turns also
-include discovery coverage records. A failed or interrupted call may lack usage.

@@ -1,4 +1,3 @@
-import { stableHash } from '../../../packages/core/src/ids.ts';
 import { describe, expect, test } from 'bun:test';
 import { scriptedController, stubModel } from '@keeled/core/testing';
 import { Session, SessionConflictError } from '../src/session.ts';
@@ -252,72 +251,4 @@ describe('tau bridge session', () => {
     expect(() => s.sendUser('again')).toThrow(SessionConflictError);
     s.close();
   });
-});
-
-test('discovery planning uses the configured arguments model through the bridge', async () => {
-  const base = scriptedController({
-    decisions: [
-      { type: 'tool_call', tool: 'catalog', input: {} },
-      { type: 'respond', outcome: 'completed' },
-    ],
-  });
-
-  const s = new Session({
-    instructions: 'Inspect every catalog reference.',
-    trackTasks: false,
-    discovery: { enabled: true, maxCalls: 2 },
-    controller: { ...base, evaluateDiscovery: async () => ({ verdict: 'no_match' }) },
-    model: stubModel({ text: 'No match.' }),
-    argumentsModel: stubModel({
-      text: 'No match.',
-      objects: [
-        {
-          use: true,
-          source: stableHash(['catalog', {}, ['refs'], ['x', 'y']]),
-          tool: 'read_record',
-          inputField: 'ref',
-          valuePath: [],
-          objective: 'Find the requested record',
-          constraints: [],
-          mode: 'all',
-        },
-      ],
-    }),
-    tools: [
-      {
-        name: 'catalog',
-        description: 'List references.',
-        risk: 'read',
-        parameters: { type: 'object', properties: {} },
-      },
-      {
-        name: 'read_record',
-        description: 'Read a catalog reference.',
-        risk: 'read',
-        parameters: { type: 'object', properties: { ref: { type: 'string' } }, required: ['ref'] },
-      },
-    ],
-  });
-
-  try {
-    const first = await s.sendUser('Find my record.');
-    expect(first.type).toBe('tool_call');
-
-    if (first.type !== 'tool_call') throw new Error('Missing catalog call');
-    const second = await s.sendToolResult({ id: first.id, content: JSON.stringify({ refs: ['x', 'y'] }) });
-    expect(second.type).toBe('tool_call');
-
-    if (second.type !== 'tool_call') throw new Error('Missing first read');
-    expect(second.arguments).toEqual({ ref: 'x' });
-    const third = await s.sendToolResult({ id: second.id, content: JSON.stringify({ title: 'Unrelated' }) });
-    expect(third.type).toBe('tool_call');
-
-    if (third.type !== 'tool_call') throw new Error('Missing second read');
-    expect(third.arguments).toEqual({ ref: 'y' });
-    const final = await s.sendToolResult({ id: third.id, content: JSON.stringify({ title: 'Unrelated again' }) });
-    expect(final.type).toBe('message');
-    expect(base.consumed).toBe(2);
-  } finally {
-    s.close();
-  }
 });
