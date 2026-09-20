@@ -13,7 +13,9 @@ const search = agentTool({
 describe('agentTool', () => {
   test('preserves input and output inference', () => {
     type Input = Parameters<typeof search.execute>[0];
+
     type Output = Awaited<ReturnType<typeof search.execute>>;
+
     const input: Input = { query: 'x' };
     const output: Output = { hits: ['x'] };
     expect(input.query).toBe('x');
@@ -27,6 +29,7 @@ describe('agentTool', () => {
       inputSchema: z.object({}),
       execute: () => 1,
     });
+
     expect(anonymous.risk).toBe('unknown');
   });
 });
@@ -38,6 +41,7 @@ describe('registerTools', () => {
       inputSchema: z.object({ value: z.number() }),
       execute: async ({ value }) => value * 2,
     });
+
     const registry = registerTools({ plain });
     expect(registry.get('plain')?.kind).toBe('sdk');
     expect(registry.get('plain')?.risk).toBe('unknown');
@@ -57,6 +61,8 @@ describe('registerTools', () => {
       inputSchema: z.object({}),
       execute: () => 1,
     };
+
+    // SAFETY: the test fixture intentionally models this exact compile-time shape.
     expect(() => registerTools({ provider: provider as never })).toThrow(/provider/);
   });
 
@@ -66,6 +72,8 @@ describe('registerTools', () => {
       inputSchema: z.object({}),
       outputSchema: z.object({}),
     };
+
+    // SAFETY: the test fixture intentionally models this exact compile-time shape.
     expect(() => registerTools({ noExecute: noExecute as never })).toThrow(/execute/);
   });
 

@@ -56,7 +56,6 @@ known limitations are deliberately visible. Use multiple trials to assess model 
 This is a diagnostic benchmark, not a new implementation. Do not tune runtime code to
 these IDs or fixtures. General fixes should transfer across schemas and renamed tools.
 
-
 ## Expanded coverage
 
 See the [58-case catalog](CATALOG.md) for domains, difficulty, and each failure mechanism.

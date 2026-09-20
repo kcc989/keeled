@@ -1,5 +1,10 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { defaultSettingsMiddleware, wrapLanguageModel, type LanguageModel } from 'ai';
+import type { JsonValue } from '@keeled/core';
+
+interface OpenRouterOptions {
+  [key: string]: JsonValue;
+}
 
 /**
  * OpenRouter models for the bridge, pinned to the listed providers in order with no fallback
@@ -13,7 +18,8 @@ export function openRouterModels(modelId: string, apiKey: string, providers: rea
     apiKey,
     supportsStructuredOutputs: true,
   });
-  const routed = (extra: Record<string, unknown> = {}): LanguageModel =>
+
+  const routed = (extra: OpenRouterOptions = {}): LanguageModel =>
     wrapLanguageModel({
       model: openrouter(modelId),
       middleware: defaultSettingsMiddleware({
@@ -28,6 +34,7 @@ export function openRouterModels(modelId: string, apiKey: string, providers: rea
         },
       }),
     });
+
   return {
     model: routed(),
     // Filling in read arguments is extraction.
@@ -38,5 +45,5 @@ export function openRouterModels(modelId: string, apiKey: string, providers: rea
 }
 
 export function providersFromEnvironment(): string[] {
-  return (process.env['OPENROUTER_PROVIDERS'] ?? 'together,modal').split(',').map(provider => provider.trim());
+  return (process.env['OPENROUTER_PROVIDERS'] ?? 'together,modal').split(',').map((provider) => provider.trim());
 }

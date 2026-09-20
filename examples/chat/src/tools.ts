@@ -9,7 +9,7 @@ export function buildTools(repo: Repo) {
     risk: 'read',
     execute: ({ query }) => ({
       query,
-      matches: repo.search(query).map(file => file.path),
+      matches: repo.search(query).map((file) => file.path),
     }),
   });
 
@@ -19,7 +19,9 @@ export function buildTools(repo: Repo) {
     risk: 'read',
     execute: ({ path }) => {
       const contents = repo.read(path);
+
       if (contents === undefined) throw new Error(`No such file: ${path}`);
+
       return { path, contents };
     },
   });

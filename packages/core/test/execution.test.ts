@@ -3,13 +3,8 @@ import { z } from 'zod';
 import { createTestAgent as createAgent } from './fixtures.ts';
 import { agentTool } from '../src/tool.ts';
 import { scriptedController, stubModel, userMessage } from '../src/testing.ts';
-import type { ControllerContext } from '../src/controller.ts';
 import type { AgentMessage } from '../src/types.ts';
-import {
-  editTool,
-  searchTool,
-  testTool,
-} from './fixtures.ts';
+import { editTool, searchTool, testTool } from './fixtures.ts';
 
 const model = stubModel({ text: 'The change is applied and the tests pass.' });
 
@@ -46,21 +41,21 @@ describe('simple loop', () => {
 
     expect(result.stopReason).toBe('blocked');
     expect(result.state.uncertainOperations).toHaveLength(1);
-    expect(result.state.observations.filter(o => o.kind === 'tool-result' && o.tool === 'editFile')).toHaveLength(0);
+    expect(result.state.observations.filter((o) => o.kind === 'tool-result' && o.tool === 'editFile')).toHaveLength(0);
 
     expect(result.text.length).toBeGreaterThan(0);
 
     const parts = result.messages.at(-1)?.parts ?? [];
-    const decisions = parts.filter(part => part.type === 'data-decision');
+    const decisions = parts.filter((part) => part.type === 'data-decision');
 
     const toolErrors = parts.filter(
-      part => part.type.startsWith('tool-') && (part as { state?: string }).state === 'output-error',
+      // SAFETY: the test fixture intentionally models this exact compile-time shape.
+      (part) => part.type.startsWith('tool-') && (part as { state?: string }).state === 'output-error',
     );
 
     expect(decisions).toHaveLength(5);
 
     expect(toolErrors).toHaveLength(1);
-
   });
 
   test('run and stream produce the same messages and text', async () => {
@@ -71,14 +66,16 @@ describe('simple loop', () => {
     const execution = fullRun().agent.stream({
       messages: [userMessage('Rename the exported helper.')],
     });
+
     const chunks: unknown[] = [];
+
     for await (const chunk of execution) chunks.push(chunk);
     const streamed = await execution.result;
 
     expect(streamed.text).toBe(direct.text);
     expect(streamed.stopReason).toBe(direct.stopReason);
-    expect(streamed.messages.at(-1)?.parts.map(part => part.type)).toEqual(
-      direct.messages.at(-1)?.parts.map(part => part.type) ?? [],
+    expect(streamed.messages.at(-1)?.parts.map((part) => part.type)).toEqual(
+      direct.messages.at(-1)?.parts.map((part) => part.type) ?? [],
     );
     expect(chunks.length).toBeGreaterThan(0);
   });
@@ -102,6 +99,7 @@ describe('termination paths', () => {
       resolveInput: () => ({}),
       execute: () => ({ same: true }),
     });
+
     const other = agentTool({
       description: 'Look something else up.',
       inputSchema: z.object({}),
@@ -109,19 +107,25 @@ describe('termination paths', () => {
       resolveInput: () => ({}),
       execute: () => ({ same: true }),
     });
+
     const controller = scriptedController({
-      decisions: Array.from({ length: 20 }, (_, index) => ({ type: 'tool', tool: index % 2 === 0 ? 'lookup' : 'other' }) as const),
+      decisions: Array.from(
+        { length: 20 },
+        (_, index) => ({ type: 'tool', tool: index % 2 === 0 ? 'lookup' : 'other' }) as const,
+      ),
     });
+
     const agent = createAgent({ instructions: 'Find it.', controller, model, tools: { lookup, other } });
     const result = await agent.run({ messages: [userMessage('Find it.')] });
     expect(result.stopReason).toBe('blocked');
-    const reports = result.state.blockers.filter(blocker => blocker.kind === 'no_progress');
+    const reports = result.state.blockers.filter((blocker) => blocker.kind === 'no_progress');
     expect(reports[0]?.reason).toContain('alternated');
     expect(reports).toHaveLength(2);
   });
 
   test('a polling tool may repeat within its time limit', async () => {
     let polls = 0;
+
     const status = agentTool({
       description: 'Check job status.',
       inputSchema: z.object({}),
@@ -131,12 +135,18 @@ describe('termination paths', () => {
       resolveInput: () => ({}),
       execute: () => {
         polls += 1;
+
         return { state: 'running' };
       },
     });
+
     const controller = scriptedController({
-      decisions: [...Array.from({ length: 8 }, () => ({ type: 'tool', tool: 'status' }) as const), { type: 'respond', outcome: 'needs_input' }],
+      decisions: [
+        ...Array.from({ length: 8 }, () => ({ type: 'tool', tool: 'status' }) as const),
+        { type: 'respond', outcome: 'needs_input' },
+      ],
     });
+
     const agent = createAgent({ instructions: 'Wait for the job.', controller, model, tools: { status } });
     const result = await agent.run({ messages: [userMessage('Is it done?')] });
     expect(polls).toBe(8);
@@ -147,7 +157,6 @@ describe('termination paths', () => {
   test('the step limit produces a useful response', async () => {
     const controller = scriptedController({
       decisions: Array.from({ length: 10 }, () => ({ type: 'tool', tool: 'search' }) as const),
-
     });
 
     const agent = createAgent({
@@ -177,7 +186,6 @@ describe('termination paths', () => {
 
     const controller = scriptedController({
       decisions: Array.from({ length: 10 }, () => ({ type: 'tool', tool: 'stuck' }) as const),
-
     });
 
     const agent = createAgent({
@@ -195,6 +203,7 @@ describe('termination paths', () => {
 
   test('invalid resolution is suspended rather than regenerated against unchanged evidence', async () => {
     let index = 0;
+
     const lookup = agentTool({
       description: 'Look up one record.',
       inputSchema: z.object({ id: z.string().min(100) }),
@@ -202,6 +211,7 @@ describe('termination paths', () => {
       resolveInput: () => ({ id: `record-${++index}` }),
       execute: () => ({ ok: true }),
     });
+
     const controller = scriptedController({
       decisions: [
         { type: 'tool', tool: 'lookup' },
@@ -211,6 +221,7 @@ describe('termination paths', () => {
         { type: 'respond', outcome: 'blocked' },
       ],
     });
+
     const agent = createAgent({
       instructions: 'Inspect each known record.',
       controller,
@@ -223,21 +234,22 @@ describe('termination paths', () => {
 
     expect(result.stopReason).toBe('blocked');
     expect(index).toBe(1);
-    expect(result.state.blockers.some(blocker => blocker.kind === 'no_progress')).toBe(true);
+    expect(result.state.blockers.some((blocker) => blocker.kind === 'no_progress')).toBe(true);
   });
 
   test('cancellation stops work and preserves partial text', async () => {
     const abort = new AbortController();
+
     const controller = scriptedController({
       decisions: [
-        context => {
+        (context) => {
           abort.abort();
           void context;
+
           return { type: 'tool', tool: 'search' };
         },
         { type: 'respond', outcome: 'completed' },
       ],
-
     });
 
     const agent = createAgent({
@@ -259,7 +271,6 @@ describe('termination paths', () => {
   test('selecting an unregistered tool is rejected rather than executed', async () => {
     const controller = scriptedController({
       decisions: [{ type: 'tool', tool: 'ghost' }],
-
     });
 
     const agent = createAgent({
@@ -292,7 +303,6 @@ describe('input resolution', () => {
         { type: 'tool', tool: 'broken' },
         { type: 'respond', outcome: 'needs_input' },
       ],
-
     });
 
     const agent = createAgent({
@@ -310,13 +320,16 @@ describe('input resolution', () => {
 
   test('input that fails schema validation never reaches execute', async () => {
     let executed = false;
+
     const mistyped = agentTool({
       description: 'Receives invalid input.',
       inputSchema: z.object({ count: z.number() }),
       risk: 'read',
-      resolveInput: () => ({ count: 'not a number' } as never),
+      // SAFETY: the test fixture intentionally models this exact compile-time shape.
+      resolveInput: () => ({ count: 'not a number' }) as never,
       execute: () => {
         executed = true;
+
         return { ok: true };
       },
     });
@@ -326,7 +339,6 @@ describe('input resolution', () => {
         { type: 'tool', tool: 'mistyped' },
         { type: 'respond', outcome: 'blocked' },
       ],
-
     });
 
     const agent = createAgent({
@@ -344,12 +356,14 @@ describe('input resolution', () => {
 
   test('a generated input is used when no resolver is supplied', async () => {
     const seen: unknown[] = [];
+
     const generated = agentTool({
       description: 'Uses generated input.',
       inputSchema: z.object({ query: z.string() }),
       risk: 'read',
-      execute: input => {
+      execute: (input) => {
         seen.push(input);
+
         return { ok: true };
       },
     });
@@ -359,7 +373,6 @@ describe('input resolution', () => {
         { type: 'tool', tool: 'generated' },
         { type: 'respond', outcome: 'completed' },
       ],
-
     });
 
     const agent = createAgent({
@@ -382,7 +395,6 @@ describe('policy', () => {
         { type: 'tool', tool: 'editFile' },
         { type: 'respond', outcome: 'blocked' },
       ],
-
     });
 
     const agent = createAgent({

@@ -1,11 +1,5 @@
-import type {
-  AgentMessage,
-  Blocker,
-  ExecutionState,
-  Observation,
-  Risk,
-  UsageBucket,
-} from './types.ts';
+import type { AgentMessage, Blocker, ExecutionState, Observation, Risk, UsageBucket } from './types.ts';
+import type { JsonObject, JsonValue } from './json.ts';
 
 export interface AvailableTool {
   name: string;
@@ -16,7 +10,7 @@ export interface AvailableTool {
   /** Ordinary argument resolution is suspended until evidence changes; ready calls remain usable. */
   resolutionBlocked?: string;
   /** Ready calls in the current decision snapshot; the runtime owns their inputs. */
-  candidates?: readonly { id: string; input: unknown; description: string; sources: readonly string[] }[];
+  candidates?: readonly { id: string; input: JsonValue; description: string; sources: readonly string[] }[];
 }
 
 export interface BudgetView {
@@ -52,7 +46,7 @@ export type NextAction<Name extends string = string> =
 /** An action that was held for the user's confirmation and has not run since. */
 export interface AwaitingAction {
   tool: string;
-  input: unknown;
+  input: JsonValue;
   reason: string;
 }
 
@@ -72,8 +66,8 @@ export interface PendingAction {
   tool: string;
   description: string;
   risk: Risk;
-  input: unknown;
-  facts?: Record<string, unknown>;
+  input: JsonValue;
+  facts?: JsonObject;
   effects?: string[];
 }
 
@@ -113,7 +107,11 @@ export type RespondLabel = (typeof respondLabels)[keyof typeof respondLabels];
 
 export function parseRespondLabel(label: string): 'completed' | 'needs_input' | 'blocked' | undefined {
   for (const [outcome, value] of Object.entries(respondLabels)) {
-    if (value === label) return outcome as 'completed' | 'needs_input' | 'blocked';
+    if (value === label) {
+      // SAFETY: Object.entries preserves the three literal keys declared by respondLabels.
+      return outcome as 'completed' | 'needs_input' | 'blocked';
+    }
   }
+
   return undefined;
 }

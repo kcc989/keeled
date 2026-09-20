@@ -6,6 +6,7 @@ import { errorMessage, isAbortError } from './errors.ts';
 import { reduceState } from './state.ts';
 import { awaitingConfirmation } from './projection.ts';
 import { type AvailableTool, type ControllerContext, type ControllerDecision } from './controller.ts';
+import { isJsonValue, type JsonValue } from './json.ts';
 import type {
   AgentMessage,
   InspectionRecord,
@@ -20,6 +21,7 @@ import type {
 } from './types.ts';
 
 type Chunk = InferUIMessageChunk<AgentMessage>;
+
 export type Writer = UIMessageStreamWriterWithOutcome<AgentMessage>;
 
 export interface TurnOptions {
@@ -94,9 +96,10 @@ export class Turn {
 
   decisionContext(
     availableTools: readonly AvailableTool[],
-    toolCatalog: ControllerContext['toolCatalog'] = availableTools.map(tool => ({ ...tool, available: true })),
+    toolCatalog: ControllerContext['toolCatalog'] = availableTools.map((tool) => ({ ...tool, available: true })),
   ): ControllerContext {
     const conversation = this.#conversation();
+
     return {
       request: this.#options.request,
       instructions: this.#options.instructions,
@@ -138,13 +141,16 @@ export class Turn {
       probabilities: decision.probabilities,
       overridden,
     };
+
     this.#record({ type: 'data-decision', id: record.id, data: record });
+
     if (decision.usage !== undefined) this.#accountController(decision.usage);
+
     return record;
   }
 
   /** Records a tool attempt after its input is known, so different calls stay distinct. */
-  recordToolAttempt(tool: string, input: unknown): void {
+  recordToolAttempt(tool: string, input: JsonValue): void {
     this.#attempts.push({
       signature: stableHash({ tool, input }),
       evidence: this.#distinctEvidence(),
@@ -156,24 +162,27 @@ export class Turn {
     kind: BlockerKind,
     reason: string,
     resolution: string,
-    details?: { tool?: string; input?: unknown },
+    details?: { tool?: string; input?: JsonValue },
   ): BlockerRecord {
     const record: BlockerRecord = {
       id: createId('blk'),
       cycle: this.#cycle,
       kind,
       tool: details?.tool,
-      ...(details?.input === undefined ? {} : { input: details.input }),
       reason,
       resolution,
     };
+
+    if (details?.input !== undefined) record.input = details.input;
+
     this.#record({ type: 'data-blocker', id: record.id, data: record });
+
     return record;
   }
 
-  recordRuntimeError(error: unknown): void {
-    const aborted = isAbortError(error);
-    this.#transition({ kind: aborted ? 'cancelled' : 'error', detail: errorMessage(error) });
+  recordRuntimeError(cause: unknown): void {
+    const aborted = isAbortError(cause);
+    this.#transition({ kind: aborted ? 'cancelled' : 'error', detail: errorMessage(cause) });
   }
 
   recordTransition(kind: TransitionRecord['kind'], detail?: string, stopReason?: StopReason): void {
@@ -186,15 +195,15 @@ export class Turn {
     this.#record({ type: 'data-transition', id: record.id, data: record });
   }
 
-  recordToolInput(toolCallId: string, toolName: string, input: unknown): void {
+  recordToolInput(toolCallId: string, toolName: string, input: JsonValue): void {
     this.#record({ type: 'tool-input-available', toolCallId, toolName, input });
   }
 
-  recordToolInputError(toolCallId: string, toolName: string, input: unknown, message: string): void {
+  recordToolInputError(toolCallId: string, toolName: string, input: JsonValue, message: string): void {
     this.#record({ type: 'tool-input-error', toolCallId, toolName, input, errorText: message });
   }
 
-  recordToolOutput(toolCallId: string, output: unknown): void {
+  recordToolOutput(toolCallId: string, output: JsonValue): void {
     this.#record({ type: 'tool-output-available', toolCallId, output });
   }
 
@@ -206,28 +215,34 @@ export class Turn {
     if (text.length === 0) return;
     const id = createId('txt');
     this.#record({ type: 'text-start', id });
+
     for (let index = 0; index < text.length; index += chunkSize) {
       const delta = text.slice(index, index + chunkSize);
       this.#partialText += delta;
       this.#record({ type: 'text-delta', id, delta });
     }
+
     this.#record({ type: 'text-end', id });
   }
 
   finishMessage(stopReason: StopReason): void {
     const completed = this.#state;
+
     const checkpoint = {
       reducerVersion: completed.reducerVersion,
       historyPosition: this.#parts.length,
       state: completed,
     };
+
     this.recordTransition('finish', `Stop reason: ${stopReason}`, stopReason);
     this.#finalState = { ...completed, stopReason };
+
     const metadata = {
       stopReason,
       usage: this.#options.usage,
       checkpoint,
     };
+
     this.#write({ type: 'message-metadata', messageMetadata: metadata });
     this.#write({ type: 'finish' });
   }
@@ -240,26 +255,31 @@ export class Turn {
    */
   detectNoProgress(): 'repeating' | 'alternating' | undefined {
     const limit = this.#options.policy.repeatLimit;
-    const attempts = this.#attempts.slice(this.#reportedThrough).filter(attempt => !attempt.exempt);
+    const attempts = this.#attempts.slice(this.#reportedThrough).filter((attempt) => !attempt.exempt);
+
     const unchanged = (window: AttemptSignature[]) =>
-      window.length > 0 && window.every(attempt => attempt.evidence === window[0]!.evidence);
+      window.length > 0 && window.every((attempt) => attempt.evidence === window[0]!.evidence);
 
     const repeated = attempts.slice(-limit);
+
     if (
       repeated.length === limit &&
       unchanged(repeated) &&
-      repeated.every(attempt => attempt.signature === repeated[0]!.signature)
+      repeated.every((attempt) => attempt.signature === repeated[0]!.signature)
     ) {
       return 'repeating';
     }
+
     const alternated = attempts.slice(-limit * 2);
+
     if (
       alternated.length === limit * 2 &&
       unchanged(alternated) &&
-      new Set(alternated.map(attempt => attempt.signature)).size === 2
+      new Set(alternated.map((attempt) => attempt.signature)).size === 2
     ) {
       return 'alternating';
     }
+
     return undefined;
   }
 
@@ -292,11 +312,15 @@ export class Turn {
   /** Distinct tool outcomes so far. */
   #distinctEvidence(): number {
     const distinct = new Set<string>();
+
     for (const observation of this.#state.observations) {
       if (observation.kind === 'tool-result' || observation.kind === 'tool-error') {
-        distinct.add(stableHash([observation.kind, observation.tool, observation.input, observation.detail, observation.summary]));
+        distinct.add(
+          stableHash([observation.kind, observation.tool, observation.input, observation.detail, observation.summary]),
+        );
       }
     }
+
     return distinct.size;
   }
 
@@ -312,6 +336,7 @@ export class Turn {
   #record(chunk: Chunk): void {
     this.#write(chunk);
     const part = toPart(chunk, this.#parts);
+
     if (part !== undefined) this.#parts.push(part);
     this.#state = reduceState(this.#conversation());
   }
@@ -330,20 +355,28 @@ function toPart(chunk: Chunk, parts: AgentMessage['parts']): AgentMessage['parts
     case 'data-decision':
     case 'data-blocker':
     case 'data-transition':
+      // SAFETY: the adjacent validation or framework contract establishes the asserted type.
       return chunk as AgentMessage['parts'][number];
     case 'text-start':
       return { type: 'text', text: '', state: 'streaming' };
     case 'text-delta': {
       const last = parts[parts.length - 1];
+
       if (last?.type === 'text') last.text += chunk.delta;
+
       return undefined;
     }
+
     case 'text-end': {
       const last = parts[parts.length - 1];
+
       if (last?.type === 'text') last.state = 'done';
+
       return undefined;
     }
+
     case 'tool-input-available':
+      // SAFETY: the adjacent validation or framework contract establishes the asserted type.
       return {
         type: `tool-${chunk.toolName}`,
         toolCallId: chunk.toolCallId,
@@ -351,6 +384,7 @@ function toPart(chunk: Chunk, parts: AgentMessage['parts']): AgentMessage['parts
         input: chunk.input,
       } as AgentMessage['parts'][number];
     case 'tool-input-error':
+      // SAFETY: the adjacent validation or framework contract establishes the asserted type.
       return {
         type: `tool-${chunk.toolName}`,
         toolCallId: chunk.toolCallId,
@@ -360,20 +394,26 @@ function toPart(chunk: Chunk, parts: AgentMessage['parts']): AgentMessage['parts
       } as AgentMessage['parts'][number];
     case 'tool-output-available': {
       const target = findToolPart(parts, chunk.toolCallId);
-      if (target !== undefined) {
+
+      if (target !== undefined && isJsonValue(chunk.output)) {
         target.state = 'output-available';
         target.output = chunk.output;
       }
+
       return undefined;
     }
+
     case 'tool-output-error': {
       const target = findToolPart(parts, chunk.toolCallId);
+
       if (target !== undefined) {
         target.state = 'output-error';
         target.errorText = chunk.errorText;
       }
+
       return undefined;
     }
+
     default:
       return undefined;
   }
@@ -383,15 +423,20 @@ interface MutableToolPart {
   type: string;
   toolCallId: string;
   state: string;
-  input?: unknown;
-  output?: unknown;
+  input?: JsonValue;
+  output?: JsonValue;
   errorText?: string;
 }
 
 function findToolPart(parts: AgentMessage['parts'], toolCallId: string): MutableToolPart | undefined {
   for (let index = parts.length - 1; index >= 0; index -= 1) {
-    const part = parts[index] as unknown as MutableToolPart | undefined;
-    if (part !== undefined && part.toolCallId === toolCallId) return part;
+    const candidate = parts[index];
+
+    if (candidate === undefined || !('toolCallId' in candidate) || candidate.toolCallId !== toolCallId) continue;
+    // SAFETY: the toolCallId discriminant proves this is a mutable tool stream part.
+
+    return candidate as MutableToolPart;
   }
+
   return undefined;
 }

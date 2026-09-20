@@ -39,11 +39,10 @@ export interface AgentDefinition<TOOLS extends AgentToolSet> {
 }
 
 const defaultRisks: readonly Risk[] = ['read', 'write', 'destructive', 'unknown'];
+
 const defaultAuthorizeRisks: readonly Risk[] = ['write', 'destructive', 'unknown'];
 
-export function compileDefinition<TOOLS extends AgentToolSet>(
-  config: AgentConfig<TOOLS>,
-): AgentDefinition<TOOLS> {
+export function compileDefinition<TOOLS extends AgentToolSet>(config: AgentConfig<TOOLS>): AgentDefinition<TOOLS> {
   if (config.instructions.trim().length === 0) {
     throw new ConfigurationError('Agent instructions must not be empty.');
   }
@@ -52,19 +51,25 @@ export function compileDefinition<TOOLS extends AgentToolSet>(
 
   const policy = config.policy ?? {};
   const maxSteps = policy.maxSteps ?? 30;
+
   if (maxSteps < 1) throw new ConfigurationError('policy.maxSteps must be at least 1.');
   const repeatLimit = policy.repeatLimit ?? 3;
+
   if (repeatLimit < 2) throw new ConfigurationError('policy.repeatLimit must be at least 2.');
   const floor = policy.inferredConfidenceFloor ?? 0.6;
+
   if (floor < 0 || floor > 1) {
     throw new ConfigurationError('policy.inferredConfidenceFloor must be between 0 and 1.');
   }
+
   const authorization = policy.authorization ?? {};
+
   const floors = {
     permittedFloor: authorization.permittedFloor ?? floor,
     verificationFloor: authorization.verificationFloor ?? floor,
     confirmedFloor: authorization.confirmedFloor ?? floor,
   };
+
   for (const [name, value] of Object.entries(floors)) {
     if (value < 0 || value > 1) {
       throw new ConfigurationError(`policy.authorization.${name} must be between 0 and 1.`);
@@ -113,6 +118,7 @@ export class Agent<TOOLS extends AgentToolSet> {
   run(options: RunOptions): Promise<AgentResult> {
     const execution = this.stream(options);
     execution.consume();
+
     return execution.result;
   }
 
@@ -122,8 +128,6 @@ export class Agent<TOOLS extends AgentToolSet> {
   }
 }
 
-export function createAgent<const TOOLS extends AgentToolSet>(
-  config: AgentConfig<TOOLS>,
-): Agent<TOOLS> {
+export function createAgent<const TOOLS extends AgentToolSet>(config: AgentConfig<TOOLS>): Agent<TOOLS> {
   return new Agent(config);
 }

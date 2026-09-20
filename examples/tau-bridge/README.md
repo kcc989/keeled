@@ -67,12 +67,12 @@ source path and confidence, selected observed options, and returned option.
 
 ## Endpoints
 
-| Method | Path | Body | Returns |
-| --- | --- | --- | --- |
-| `PUT` | `/sessions/:id` | `{ instructions, tools, history? }` | `201` |
-| `POST` | `/sessions/:id/user` | `{ text }` | event |
-| `POST` | `/sessions/:id/tool` | `{ id, content, error? }` | event |
-| `DELETE` | `/sessions/:id` | | `204` |
+| Method   | Path                 | Body                                | Returns |
+| -------- | -------------------- | ----------------------------------- | ------- |
+| `PUT`    | `/sessions/:id`      | `{ instructions, tools, history? }` | `201`   |
+| `POST`   | `/sessions/:id/user` | `{ text }`                          | event   |
+| `POST`   | `/sessions/:id/tool` | `{ id, content, error? }`           | event   |
+| `DELETE` | `/sessions/:id`      |                                     | `204`   |
 
 An event is `{ type: 'tool_call', id, name, arguments, decisions }` or
 `{ type: 'message', text, stopReason, usage, decisions }`.
@@ -89,16 +89,16 @@ bun run tau3 <domain> --task-ids 0 1 2 --max-concurrency 1
 checkout, and stops the bridge. Any other `tau2 run` option passes through. The domain is passed through without special handling. The default is **one trial per task**;
 keep screening runs at one trial until a promising change warrants a larger evaluation.
 
-| Variable | Where | Purpose |
-| --- | --- | --- |
-| `TYPESAFE_API_KEY` | Keeled `.env` | Jev controller |
-| `OPENROUTER_API_KEY` | Keeled `.env` | Keeled's model calls |
-| `KEELED_MODEL` | Keeled `.env` | OpenRouter model id, e.g. `anthropic/claude-sonnet-4.5` |
-| `KEELED_OBSERVED_ARGUMENTS` | optional | Set to `1` to try Jev-selected, evidence-backed read arguments after the controller selects an unresolved read tool |
-| `OPENROUTER_PROVIDERS` | optional | Provider order, default `together,modal`; no fallback beyond the list |
-| `OPENROUTER_API_KEY` | τ³-bench `.env` | User simulator |
-| `TAU2_USER_LLM` | optional | User simulator model, default `openrouter/openai/gpt-4.1` |
-| `TAU2_DIR` | optional | τ³-bench checkout, default `~/projects/tau2-bench` |
+| Variable                    | Where           | Purpose                                                                                                             |
+| --------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `TYPESAFE_API_KEY`          | Keeled `.env`   | Jev controller                                                                                                      |
+| `OPENROUTER_API_KEY`        | Keeled `.env`   | Keeled's model calls                                                                                                |
+| `KEELED_MODEL`              | Keeled `.env`   | OpenRouter model id, e.g. `anthropic/claude-sonnet-4.5`                                                             |
+| `KEELED_OBSERVED_ARGUMENTS` | optional        | Set to `1` to try Jev-selected, evidence-backed read arguments after the controller selects an unresolved read tool |
+| `OPENROUTER_PROVIDERS`      | optional        | Provider order, default `together,modal`; no fallback beyond the list                                               |
+| `OPENROUTER_API_KEY`        | τ³-bench `.env` | User simulator                                                                                                      |
+| `TAU2_USER_LLM`             | optional        | User simulator model, default `openrouter/openai/gpt-4.1`                                                           |
+| `TAU2_DIR`                  | optional        | τ³-bench checkout, default `~/projects/tau2-bench`                                                                  |
 
 The two key sets stay separate. τ³-bench never overrides variables already in its
 environment, so the runner withholds Keeled's credentials from it and it reads only its

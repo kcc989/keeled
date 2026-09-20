@@ -2,7 +2,7 @@ import { abortable } from './async.ts';
 import { applyTaskPatch } from './task.ts';
 import { createUIMessageStream, createUIMessageStreamResponse } from 'ai';
 import { asSchema, jsonSchema, safeValidateTypes } from '@ai-sdk/provider-utils';
-import type { UIMessageStreamOutcome } from 'ai';
+import type { ModelMessage, UIMessageStreamOutcome } from 'ai';
 import { GenerationHost } from './generation.ts';
 import { createId, stableHash } from './ids.ts';
 import { MissingInformation, errorMessage, isAbortError } from './errors.ts';
@@ -27,6 +27,7 @@ import type {
   UsageTotals,
 } from './types.ts';
 import type { AgentDefinition, RunOptions } from './agent.ts';
+import { isJsonValue, type JsonValue } from './json.ts';
 
 type Chunk = Parameters<Writer['write']>[0];
 
@@ -34,8 +35,12 @@ const defaultPollTimeoutMs = 60_000;
 
 async function requiredParameters(tool: RegisteredTool): Promise<string[]> {
   try {
+    // SAFETY: the adjacent validation or framework contract establishes the asserted type.
     const schema = (await asSchema(tool.inputSchema).jsonSchema) as { required?: unknown };
-    return Array.isArray(schema.required) ? schema.required.filter((name): name is string => typeof name === 'string') : [];
+
+    return Array.isArray(schema.required)
+      ? schema.required.filter((name): name is string => typeof name === 'string')
+      : [];
   } catch {
     return [];
   }
@@ -53,7 +58,7 @@ interface Refusal {
   /** The instructions it applied. */
   policy: string;
   /** For each result it relied on, the call and that result, so a changed result voids it. */
-  cited: { tool: string; input: unknown; result: string }[];
+  cited: { tool: string; input: JsonValue; result: string }[];
   /** Successful state-changing calls when it was made. */
   writes: number;
   /** Distinct evidence when it was made; a refusal for missing evidence yields to any new. */
@@ -95,22 +100,25 @@ export class AgentExecution<TOOLS extends AgentToolSet> {
 
   constructor(definition: AgentDefinition<TOOLS>, options: RunOptions) {
     let settle!: (result: AgentResult) => void;
-    let fail!: (error: unknown) => void;
+    let fail!: (cause: unknown) => void;
     this.#result = new Promise<AgentResult>((resolve, reject) => {
       settle = resolve;
       fail = reject;
     });
 
+    // SAFETY: the adjacent validation or framework contract establishes the asserted type.
     const originalMessages = [...options.messages] as AgentMessage[];
+
     const usage: UsageTotals = {
       model: { calls: 0, inputTokens: 0, outputTokens: 0 },
       controller: { calls: 0, inputTokens: 0, outputTokens: 0 },
     };
+
     let run: ExecutionRun<TOOLS> | undefined;
 
     this.#stream = createUIMessageStream<AgentMessage>({
       originalMessages,
-      onError: error => errorMessage(error),
+      onError: (error) => errorMessage(error),
       execute: async ({ writer }) => {
         run = new ExecutionRun(definition, options, writer, originalMessages, usage);
         await run.execute();
@@ -118,8 +126,10 @@ export class AgentExecution<TOOLS extends AgentToolSet> {
       onEnd: ({ messages, outcome }) => {
         if (run === undefined) {
           fail(new Error('Execution did not start.'));
+
           return;
         }
+
         settle(run.result(messages, outcome));
       },
     });
@@ -137,12 +147,15 @@ export class AgentExecution<TOOLS extends AgentToolSet> {
   /** Drains the output without starting another execution. */
   consume(): void {
     const reader = this.#take().getReader();
+
     const pump = async (): Promise<void> => {
       for (;;) {
         const { done } = await reader.read();
+
         if (done) return;
       }
     };
+
     void pump().catch(() => {
       /* consumption errors surface through the result promise */
     });
@@ -154,13 +167,16 @@ export class AgentExecution<TOOLS extends AgentToolSet> {
 
   [Symbol.asyncIterator](): AsyncIterator<Chunk> {
     const reader = this.#take().getReader();
+
     return {
       async next() {
         const { done, value } = await reader.read();
+
         return done ? { done: true, value: undefined } : { done: false, value };
       },
       async return() {
         await reader.cancel();
+
         return { done: true, value: undefined };
       },
     };
@@ -170,7 +186,9 @@ export class AgentExecution<TOOLS extends AgentToolSet> {
     if (this.#taken) {
       throw new Error('This execution has already been consumed. Call agent.stream() again for a new one.');
     }
+
     this.#taken = true;
+
     return this.#stream;
   }
 }
@@ -187,7 +205,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
   /** Refusals this turn, keyed by call, with the tool evidence they were made against. */
   readonly #refusals = new Map<string, Refusal>();
   // Rebuilt before each decision: IDs cannot address stale or unavailable calls.
-  readonly #candidates = new Map<string, { tool: string; input: unknown }>();
+  readonly #candidates = new Map<string, { tool: string; input: JsonValue }>();
   #candidateVersion = 0;
   readonly #candidatePrefix = createId('snapshot');
   readonly #resolutionFailures = new Map<string, { revision: string; reason: string }>();
@@ -210,23 +228,32 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     this.#originalMessages = originalMessages;
     this.#abort = new AbortController();
     this.#callerSignal = options.abortSignal;
+
     if (this.#policy.turnTimeoutMs !== undefined) {
-      this.#deadlineTimer = setTimeout(() => this.#abort.abort(new DOMException('Turn deadline exceeded', 'TimeoutError')), this.#policy.turnTimeoutMs);
+      this.#deadlineTimer = setTimeout(
+        () => this.#abort.abort(new DOMException('Turn deadline exceeded', 'TimeoutError')),
+        this.#policy.turnTimeoutMs,
+      );
     }
+
     if (options.abortSignal !== undefined) {
       const forward = () => this.#abort.abort(options.abortSignal?.reason);
+
       if (options.abortSignal.aborted) forward();
       else options.abortSignal.addEventListener('abort', forward, { once: true });
     }
+
     this.#request = latestRequest(originalMessages);
     const pollStarted = new Map<string, number>();
     this.#turn = new Turn({
-      isExempt: name => {
+      isExempt: (name) => {
         const tool = definition.registry.get(name);
+
         if (tool?.repeat !== 'poll') return false;
         const now = Date.now();
         const started = pollStarted.get(name) ?? now;
         pollStarted.set(name, started);
+
         return now - started < (tool.pollTimeoutMs ?? defaultPollTimeoutMs);
       },
       request: this.#request,
@@ -255,21 +282,25 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
 
     try {
       const tracker = this.#definition.taskTracker;
-      const user = this.#originalMessages.findLast(message => message.role === 'user');
+      const user = this.#originalMessages.findLast((message) => message.role === 'user');
+
       if (tracker !== undefined && user !== undefined && !this.#turn.state.task.processedMessages.includes(user.id)) {
         const patch = await abortable(this.#abort.signal, () => tracker.update(this.#agentContext(undefined)));
         this.#turn.recordTask(applyTaskPatch(this.#turn.state.task, patch, user.id, this.#request));
       }
+
       while (this.#turn.hasWorkBudget()) {
         this.#turn.throwIfAborted();
         this.#turn.beginCycle();
 
         const resume = resumable.shift();
+
         if (resume !== undefined) {
           const action: Extract<NextAction, { type: 'tool' }> = {
             type: 'tool',
             tool: resume.tool,
           };
+
           this.#turn.recordDecision({
             action,
             rationale: 'The runtime resumed the exact action held for confirmation.',
@@ -281,28 +312,45 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
           const action = this.#normalize(control.action, context);
 
           this.#turn.recordDecision({ ...control, action });
+
           if (action.type === 'respond') {
-            if (action.outcome === 'completed' && this.#turn.state.uncertainOperations.some(operation => operation.status === 'unknown')) {
-              this.#turn.recordBlocker('missing_evidence', 'A write has an unknown outcome.', 'Verify the write outcome before declaring completion.');
+            if (
+              action.outcome === 'completed' &&
+              this.#turn.state.uncertainOperations.some((operation) => operation.status === 'unknown')
+            ) {
+              this.#turn.recordBlocker(
+                'missing_evidence',
+                'A write has an unknown outcome.',
+                'Verify the write outcome before declaring completion.',
+              );
               outcome = 'blocked';
               break;
             }
+
             if (action.outcome === 'completed' && !(await this.#verifyCompletion())) {
-              if (this.#lastCompletionCheck === this.#evidenceVersion()) { outcome = 'blocked'; break; }
+              if (this.#lastCompletionCheck === this.#evidenceVersion()) {
+                outcome = 'blocked';
+                break;
+              }
+
               this.#lastCompletionCheck = this.#evidenceVersion();
               continue;
             }
+
             outcome = action.outcome;
             break;
           }
+
           await this.#callTool(action);
         }
 
         // The first report at one evidence state is feedback. Repeating without any new
         // evidence ends the turn. Later evidence permits a fresh recovery attempt.
         const stalled = this.#turn.detectNoProgress();
+
         if (stalled !== undefined) {
           const evidence = this.#turn.distinctEvidence();
+
           if (reportedAtEvidence === evidence) {
             this.#turn.recordBlocker(
               'no_progress',
@@ -312,6 +360,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
             outcome = 'blocked';
             break;
           }
+
           reportedAtEvidence = evidence;
           this.#turn.markNoProgressReported();
           this.#turn.recordBlocker(
@@ -328,16 +377,22 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       this.#turn.recordRuntimeError(error);
     }
 
-    try { await this.#finish(outcome); } finally { clearTimeout(this.#deadlineTimer); }
+    try {
+      await this.#finish(outcome);
+    } finally {
+      clearTimeout(this.#deadlineTimer);
+    }
   }
 
   result(messages: AgentMessage[], outcome: UIMessageStreamOutcome): AgentResult {
     const stopReason = outcome.status === 'aborted' ? 'cancelled' : this.#stopReason;
+
     return {
       messages,
       text: this.#turn.partialText,
       stopReason,
       usage: this.#usage,
+      // SAFETY: the adjacent validation or framework contract establishes the asserted type.
       state: this.#turn.state as ExecutionState,
       steps: this.#turn.state.stepsUsed,
     };
@@ -347,7 +402,8 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
 
   #normalize(action: NextAction, context: ControllerContext): NextAction {
     if (action.type === 'respond') return action;
-    return context.availableTools.some(tool => tool.name === action.tool)
+
+    return context.availableTools.some((tool) => tool.name === action.tool)
       ? action
       : { type: 'respond', outcome: 'blocked' };
   }
@@ -356,9 +412,10 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
 
   async #callTool(
     action: Extract<NextAction, { type: 'tool' }>,
-    callOptions: { preparedInput?: unknown } = {},
+    callOptions: { preparedInput?: JsonValue } = {},
   ): Promise<void> {
     const tool = this.#definition.registry.get(action.tool);
+
     if (tool === undefined) {
       this.#turn.recordBlocker(
         'unavailable',
@@ -366,6 +423,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
         'Choose one of the available tools, or respond to the user.',
         { tool: action.tool },
       );
+
       return;
     }
 
@@ -376,33 +434,49 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
         'Do not retry it; respond to the user without it.',
         { tool: tool.name },
       );
+
       return;
     }
 
     const context = this.#agentContext(action);
 
     const suspended = this.#resolutionFailures.get(tool.name);
-    if (action.candidateId === undefined && !('preparedInput' in callOptions) && suspended?.revision === this.#resolutionVersion(tool)) {
+
+    if (
+      action.candidateId === undefined &&
+      !('preparedInput' in callOptions) &&
+      suspended?.revision === this.#resolutionVersion(tool)
+    ) {
       this.#turn.recordToolAttempt(tool.name, { unresolved: true });
-      this.#turn.recordBlocker('no_progress', suspended.reason, 'Obtain new evidence before resolving this tool again.', { tool: tool.name });
+      this.#turn.recordBlocker(
+        'no_progress',
+        suspended.reason,
+        'Obtain new evidence before resolving this tool again.',
+        { tool: tool.name },
+      );
+
       return;
     }
 
-    let input: unknown;
+    let input: JsonValue;
+
     try {
       if ('preparedInput' in callOptions) {
         input = callOptions.preparedInput;
       } else if (action.candidateId !== undefined) {
         const candidate = this.#candidates.get(action.candidateId);
+
         if (candidate === undefined || candidate.tool !== tool.name || tool.risk !== 'read') {
           throw new Error('The selected call candidate is stale or does not belong to this read tool.');
         }
+
         input = structuredClone(candidate.input);
       } else {
         input = await abortable(this.#abort.signal, () => this.#resolveInput(tool, context));
       }
     } catch (error) {
       if (this.#turn.isAborted() || isAbortError(error)) throw error;
+
       if (error instanceof MissingInformation) {
         this.#resolutionFailures.set(tool.name, { revision: this.#resolutionVersion(tool), reason: error.missing });
         this.#turn.recordToolAttempt(tool.name, { unresolved: true });
@@ -412,8 +486,10 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
           `Obtain it first, from a lookup or from the user: ${error.missing}`,
           { tool: tool.name },
         );
+
         return;
       }
+
       this.#resolutionFailures.set(tool.name, { revision: this.#resolutionVersion(tool), reason: errorMessage(error) });
       this.#turn.recordToolAttempt(tool.name, { unresolved: true });
       this.#turn.recordBlocker(
@@ -422,12 +498,17 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
         `Obtain the values ${tool.name} needs, from a lookup or from the user, before calling it again.`,
         { tool: tool.name },
       );
+
       return;
     }
 
     const validated = await safeValidateTypes({ value: input, schema: tool.inputSchema });
+
     if (!validated.success) {
-      this.#resolutionFailures.set(tool.name, { revision: this.#resolutionVersion(tool), reason: validated.error.message });
+      this.#resolutionFailures.set(tool.name, {
+        revision: this.#resolutionVersion(tool),
+        reason: validated.error.message,
+      });
       this.#turn.recordToolAttempt(tool.name, input);
       this.#turn.recordBlocker(
         'invalid_input',
@@ -435,44 +516,83 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
         `Call ${tool.name} only with input that matches its schema.`,
         { tool: tool.name, input },
       );
+
       return;
     }
 
-    this.#turn.recordToolAttempt(tool.name, validated.value);
+    if (!isJsonValue(validated.value)) {
+      this.#turn.recordBlocker(
+        'invalid_input',
+        'Input passed its tool schema but is not JSON-serializable.',
+        `Call ${tool.name} only with JSON-serializable input.`,
+        { tool: tool.name },
+      );
 
-    if (tool.repeat === 'reuse' && this.#alreadyReturned(tool.name, validated.value)) {
+      return;
+    }
+
+    const validInput = validated.value;
+    this.#turn.recordToolAttempt(tool.name, validInput);
+
+    if (tool.repeat === 'reuse' && this.#alreadyReturned(tool.name, validInput)) {
       this.#turn.recordBlocker(
         'duplicate',
-        `${tool.name} already returned a result this turn for this exact input: ${JSON.stringify(validated.value)}. ` +
+        `${tool.name} already returned a result this turn for this exact input: ${JSON.stringify(validInput)}. ` +
           'The tool is marked reusable and no state-changing call has succeeded since.',
         'Use the result already in the call history.',
-        { tool: tool.name, input: validated.value },
+        { tool: tool.name, input: validInput },
       );
+
       return;
     }
 
-    if (tool.risk !== 'read' && this.#turn.state.uncertainOperations.some(operation => operation.status === 'unknown')) {
-      this.#turn.recordBlocker('policy_denied', 'A previous write has an unknown outcome.', 'The outcome must be verified before further writes.', { tool: tool.name, input: validated.value });
+    if (
+      tool.risk !== 'read' &&
+      this.#turn.state.uncertainOperations.some((operation) => operation.status === 'unknown')
+    ) {
+      this.#turn.recordBlocker(
+        'policy_denied',
+        'A previous write has an unknown outcome.',
+        'The outcome must be verified before further writes.',
+        { tool: tool.name, input: validInput },
+      );
+
       return;
     }
-    const inspection = await abortable(this.#abort.signal, () => tool.inspect?.(structuredClone(validated.value), context));
-    if (inspection !== undefined) this.#turn.recordInspection({ id: createId('inspection'), tool: tool.name, input: structuredClone(validated.value), ...structuredClone(inspection) });
+
+    const inspection = await abortable(this.#abort.signal, () => tool.inspect?.(structuredClone(validInput), context));
+
+    if (inspection !== undefined)
+      this.#turn.recordInspection({
+        id: createId('inspection'),
+        tool: tool.name,
+        input: structuredClone(validInput),
+        ...structuredClone(inspection),
+      });
+
     if (inspection !== undefined && inspection.allowed !== true) {
-      this.#turn.recordBlocker('policy_denied', inspection.reason, 'Resolve the application check before retrying.', { tool: tool.name, input: validated.value });
+      this.#turn.recordBlocker('policy_denied', inspection.reason, 'Resolve the application check before retrying.', {
+        tool: tool.name,
+        input: validInput,
+      });
+
       return;
     }
-    const denial = await this.#authorize(tool, validated.value, inspection);
+
+    const denial = await this.#authorize(tool, validInput, inspection);
+
     if (denial !== undefined) {
       this.#turn.recordBlocker(denial.kind, denial.reason, denial.resolution, {
         tool: tool.name,
-        input: validated.value,
+        input: validInput,
       });
+
       return;
     }
 
     this.#abort.signal.throwIfAborted();
     const toolCallId = createId('call');
-    const finalInput = validated.value;
+    const finalInput = validInput;
     this.#turn.recordToolInput(toolCallId, tool.name, finalInput);
 
     const options: AgentToolExecutionOptions = {
@@ -482,23 +602,49 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       context: undefined,
     };
 
-    let output: unknown;
+    let output: JsonValue;
+
     try {
       output = await abortable(this.#abort.signal, () => tool.invoke(finalInput, options));
     } catch (error) {
-      if (tool.risk !== 'read') this.#turn.recordOperation({ id: toolCallId, tool: tool.name, input: finalInput, reason: errorMessage(error), status: 'unknown' });
+      if (tool.risk !== 'read')
+        this.#turn.recordOperation({
+          id: toolCallId,
+          tool: tool.name,
+          input: finalInput,
+          reason: errorMessage(error),
+          status: 'unknown',
+        });
       this.#turn.recordToolError(toolCallId, errorMessage(error));
+
       if (this.#turn.isAborted() || isAbortError(error)) throw error;
+
       return;
     }
 
     if (tool.outputSchema !== undefined) {
       const checked = await safeValidateTypes({ value: output, schema: tool.outputSchema });
+
       if (!checked.success) {
-        if (tool.risk !== 'read') this.#turn.recordOperation({ id: toolCallId, tool: tool.name, input: finalInput, reason: checked.error.message, status: 'unknown' });
+        if (tool.risk !== 'read')
+          this.#turn.recordOperation({
+            id: toolCallId,
+            tool: tool.name,
+            input: finalInput,
+            reason: checked.error.message,
+            status: 'unknown',
+          });
         this.#turn.recordToolError(toolCallId, `Output failed schema validation: ${checked.error.message}`);
+
         return;
       }
+
+      if (!isJsonValue(checked.value)) {
+        this.#turn.recordToolError(toolCallId, 'Output passed its tool schema but is not JSON-serializable.');
+
+        return;
+      }
+
       output = checked.value;
     }
 
@@ -512,19 +658,34 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
    * waits for any confirmation the instructions require, and a doubtful confirmation counts
    * as none. Returns the reason when the call may not run.
    */
-  async #authorize(tool: RegisteredTool, input: unknown, inspection?: import('./tool.ts').InputInspection): Promise<Denial | undefined> {
+  async #authorize(
+    tool: RegisteredTool,
+    input: JsonValue,
+    inspection?: import('./tool.ts').InputInspection,
+  ): Promise<Denial | undefined> {
     const controller = this.#definition.controller;
     const policy = this.#policy.authorization;
+
     if (!policy.risks.has(tool.risk) || controller.authorize === undefined) return undefined;
 
     // A retry of a refused call gets the same answer while what it was decided against holds.
     const key = stableHash({ tool: tool.name, input });
     const refused = this.#refusals.get(key);
+
     if (refused !== undefined && this.#stillHolds(refused)) return refused.denial;
 
-    const action: PendingAction = { tool: tool.name, description: tool.description, risk: tool.risk, input, facts: inspection?.facts, effects: inspection?.effects };
+    const action: PendingAction = {
+      tool: tool.name,
+      description: tool.description,
+      risk: tool.risk,
+      input,
+      facts: inspection?.facts,
+      effects: inspection?.effects,
+    };
+
     const context = this.#turn.decisionContext(await this.#availableTools(), this.#catalog);
     const answer = await abortable(this.#abort.signal, () => controller.authorize!(context, action));
+
     if (answer.usage !== undefined) this.#turn.accountController(answer.usage);
 
     const clear =
@@ -532,17 +693,23 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       answer.permitted.confidence >= policy.permittedFloor &&
       !answer.needsVerification.value &&
       answer.needsVerification.confidence >= policy.verificationFloor;
+
     const call = `${tool.name} ${JSON.stringify(input)}`;
+
     const refuse = (denial: Denial, verdict?: PermissionVerdict) => {
       if (denial.kind !== 'needs_confirmation') this.#refusals.set(key, this.#refusal(denial, context, verdict));
+
       return denial;
     };
 
     let basis = 'controller';
+
     if (!clear) {
       const verdict = await this.#verifyPermission(action, context);
+
       if (!verdict.permitted) {
-        const missing = (typeof verdict.missing === 'string' ? verdict.missing : '').trim();
+        const missing = verdict.missing?.trim() ?? '';
+
         return refuse(
           missing.length > 0
             ? {
@@ -553,11 +720,13 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
             : {
                 kind: 'policy_denied',
                 reason: `Not permitted: ${call}. ${verdict.reason}`,
-                resolution: 'Do not retry this action; explain the refusal to the user or choose one the policy permits.',
+                resolution:
+                  'Do not retry this action; explain the refusal to the user or choose one the policy permits.',
               },
           verdict,
         );
       }
+
       basis = `verified: ${verdict.reason}`;
     }
 
@@ -565,40 +734,52 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       return refuse({
         kind: 'needs_confirmation',
         reason: `Awaiting the user's explicit confirmation: ${call}.`,
-        resolution: 'Describe this exact action to the user and ask them to confirm it; it is checked again before it runs.',
+        resolution:
+          'Describe this exact action to the user and ask them to confirm it; it is checked again before it runs.',
       });
     }
 
     this.#turn.recordTransition('authorized', `${call} (${basis})`);
+
     return undefined;
   }
 
   #refusal(denial: Denial, context: ControllerContext, verdict: PermissionVerdict | undefined): Refusal {
     const history = callHistory(context.conversation, context.observations);
+
     const cited = (Array.isArray(verdict?.evidence) ? verdict.evidence : [])
-      .map(ref => history.find(call => call.ref === ref))
-      .filter(call => call !== undefined)
-      .map(call => ({ tool: call.tool, input: call.input, result: stableHash([call.outcome, call.result]) }));
-    return {
+      .map((ref) => history.find((call) => call.ref === ref))
+      .filter((call) => call !== undefined)
+      .map((call) => ({ tool: call.tool, input: call.input, result: stableHash([call.outcome, call.result]) }));
+
+    const refusal: Refusal = {
       denial,
       policy: stableHash(this.#definition.instructions),
       cited,
       writes: this.#successfulWrites(),
       evidence: this.#turn.distinctEvidence(),
-      ...(verdict?.timeSensitive === true ? { expiresAt: Date.now() + timeSensitiveRefusalMs } : {}),
     };
+
+    if (verdict?.timeSensitive === true) refusal.expiresAt = Date.now() + timeSensitiveRefusalMs;
+
+    return refusal;
   }
 
   #stillHolds(refusal: Refusal): boolean {
     if (refusal.policy !== stableHash(this.#definition.instructions)) return false;
+
     if (refusal.writes !== this.#successfulWrites()) return false;
+
     if (refusal.expiresAt !== undefined && Date.now() >= refusal.expiresAt) return false;
+
     if (refusal.denial.kind === 'missing_evidence' && refusal.evidence !== this.#turn.distinctEvidence()) return false;
     const history = callHistory(this.#turn.conversation, this.#turn.state.observations);
-    return refusal.cited.every(cited => {
+
+    return refusal.cited.every((cited) => {
       const latest = history.findLast(
-        call => call.tool === cited.tool && stableHash(call.input) === stableHash(cited.input),
+        (call) => call.tool === cited.tool && stableHash(call.input) === stableHash(cited.input),
       );
+
       return latest === undefined || stableHash([latest.outcome, latest.result]) === cited.result;
     });
   }
@@ -606,7 +787,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
   /** Successful calls this turn that are not read-only, any of which may change state. */
   #successfulWrites(): number {
     return this.#turn.state.observations.filter(
-      observation =>
+      (observation) =>
         observation.kind === 'tool-result' &&
         (this.#definition.registry.get(observation.tool ?? '')?.risk ?? 'unknown') !== 'read',
     ).length;
@@ -616,39 +797,41 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
    * Whether a reusable tool already returned a result this turn for this exact input,
    * with no successful call since that is not read-only.
    */
-  #alreadyReturned(toolName: string, input: unknown): boolean {
+  #alreadyReturned(toolName: string, input: JsonValue): boolean {
     const observations = this.#turn.state.observations;
     const key = stableHash(input);
+
     const index = observations.findLastIndex(
-      observation =>
-        observation.kind === 'tool-result' &&
-        observation.tool === toolName &&
-        stableHash(observation.input) === key,
+      (observation) =>
+        observation.kind === 'tool-result' && observation.tool === toolName && stableHash(observation.input) === key,
     );
+
     if (index === -1) return false;
+
     return !observations
       .slice(index + 1)
       .some(
-        observation =>
+        (observation) =>
           observation.kind === 'tool-result' &&
           (this.#definition.registry.get(observation.tool ?? '')?.risk ?? 'unknown') !== 'read',
       );
   }
 
-  async #verifyPermission(
-    action: PendingAction,
-    context: ControllerContext,
-  ): Promise<PermissionVerdict> {
+  async #verifyPermission(action: PendingAction, context: ControllerContext): Promise<PermissionVerdict> {
     const calls = callHistory(context.conversation, context.observations)
       .map(
-        call =>
+        (call) =>
           `- [${call.ref}] ${call.tool}(${JSON.stringify(call.input)}) ` +
-          (call.outcome === 'result' ? `returned ${JSON.stringify(presentResult(call.result, call.ref))}` : `failed: ${String(call.result)}`),
+          (call.outcome === 'result'
+            ? `returned ${JSON.stringify(presentResult(call.result, call.ref))}`
+            : `failed: ${String(call.result)}`),
       )
       .join('\n');
+
     const result = await this.#generation.generateObject<PermissionVerdict>({
       schema: permissionSchema,
-      name: 'permission', purpose: 'permission',
+      name: 'permission',
+      purpose: 'permission',
       system:
         'You decide whether an agent may take one action now under its instructions. First identify the ' +
         'conditions the instructions set for this kind of action; rules about other kinds of action do not ' +
@@ -658,7 +841,9 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
         'Do not consider whether the user has confirmed the action; that is checked separately.',
       prompt: [
         `Agent instructions:\n${this.#definition.instructions}`,
-        `Conversation:\n${projectMessages(context.conversation).map(m => `${m.role}: ${typeof m.content === 'string' ? m.content : ''}`).join('\n')}`,
+        `Conversation:\n${projectMessages(context.conversation)
+          .map((m) => `${m.role}: ${isTextContent(m.content) ? m.content : ''}`)
+          .join('\n')}`,
         `Tool calls so far:\n${calls.length === 0 ? 'None.' : calls}`,
         `Proposed action:\n${action.tool} — ${action.description}\nInput: ${JSON.stringify(action.input)}\nVerified facts: ${JSON.stringify(action.facts)}\nEffects: ${JSON.stringify(action.effects)}\nRetained constraints: ${JSON.stringify(context.state.task.constraints)}`,
         'State whether it is permitted and give the deciding reason in one sentence. If it is not permitted only ' +
@@ -669,16 +854,19 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       ].join('\n\n'),
       abortSignal: this.#abort.signal,
     });
+
     return result.object;
   }
 
-  async #resolveInput(tool: RegisteredTool, context: AgentContext): Promise<unknown> {
+  async #resolveInput(tool: RegisteredTool, context: AgentContext): Promise<JsonValue> {
     if (tool.resolveInput !== undefined) {
       return await tool.resolveInput(context);
     }
-    const result = await this.#generation.generateObject<unknown>({
+
+    const result = await this.#generation.generateObject<JsonValue>({
       schema: tool.inputSchema,
-      name: tool.name, purpose: 'tool_input',
+      name: tool.name,
+      purpose: 'tool_input',
       description: tool.description,
       model: tool.model ?? this.#definition.argumentsModel ?? this.#definition.model,
       system:
@@ -693,18 +881,18 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
           : `Input of this tool's action awaiting the user's confirmation:\n${JSON.stringify(context.action.awaitingInput)}\n` +
             'If the user confirmed it unchanged, return exactly this input.',
         `Conversation:\n${JSON.stringify(projectMessages(context.conversation))}`,
-        `Tool calls:\n${JSON.stringify(callHistory(context.conversation, context.state.observations).map(call => ({ ...call, result: presentResult(call.result, call.ref) })))}`,
+        `Tool calls:\n${JSON.stringify(callHistory(context.conversation, context.state.observations).map((call) => ({ ...call, result: presentResult(call.result, call.ref) })))}`,
         `Evidence:\n${digestObservations(context.state.observations)}`,
         `Retained goals and constraints:\n${JSON.stringify(context.state.task)}`,
         `Application inspections:\n${JSON.stringify(context.state.inspections)}`,
       ]
-        .filter(line => line.length > 0)
+        .filter((line) => line.length > 0)
         .join('\n\n'),
       abortSignal: this.#abort.signal,
     });
+
     return result.object;
   }
-
 
   #resolutionVersion(tool: RegisteredTool): string {
     return tool.resolutionKey?.(this.#agentContext(undefined)) ?? this.#evidenceVersion();
@@ -712,38 +900,70 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
 
   #evidenceVersion(): string {
     // A repeated result with a new call ID is not new evidence.
-    return stableHash([...new Set(callHistory(this.#turn.conversation, this.#turn.state.observations)
-      .filter(call => call.outcome === 'result')
-      .map(call => stableHash([call.tool, call.input, call.result])))].sort());
+    return stableHash(
+      [
+        ...new Set(
+          callHistory(this.#turn.conversation, this.#turn.state.observations)
+            .filter((call) => call.outcome === 'result')
+            .map((call) => stableHash([call.tool, call.input, call.result])),
+        ),
+      ].sort(),
+    );
   }
 
   async #verifyCompletion(): Promise<boolean> {
     const tracker = this.#definition.taskTracker;
     const task = structuredClone(this.#turn.state.task);
-    if (tracker === undefined || !task.goals.some(goal => goal.status === 'pending')) return true;
+
+    if (tracker === undefined || !task.goals.some((goal) => goal.status === 'pending')) return true;
     const history = callHistory(this.#turn.conversation, this.#turn.state.observations);
+
     if (this.#lastCompletionCheck === this.#evidenceVersion()) return false;
     const checks = await abortable(this.#abort.signal, () => tracker.verify(this.#agentContext(undefined)));
+
     for (const check of checks) {
-      const goal = task.goals.find(g => g.id === check.id && g.status === 'pending');
+      const goal = task.goals.find((g) => g.id === check.id && g.status === 'pending');
+
       if (goal === undefined || !check.complete || check.evidence.length === 0) continue;
-      const evidence = check.evidence.map(ref => history.find(call => call.ref === ref && call.outcome === 'result'));
-      if (evidence.some(call => call === undefined)) continue;
-      if (goal.requiresWrite && !evidence.some(call => {
-        const sourceTool = this.#definition.registry.get(call!.tool);
-        if (sourceTool === undefined || sourceTool.risk === 'read') return false;
-        if (call!.turn === 'current') return true;
-        const sourceIndex = this.#originalMessages.findIndex(message => message.id === goal.source);
-        const resultIndex = this.#originalMessages.findIndex(message => message.parts.some(part => 'toolCallId' in part && part.toolCallId === call!.ref));
-        return sourceIndex >= 0 && resultIndex > sourceIndex;
-      })) continue;
+
+      const evidence = check.evidence.map((ref) =>
+        history.find((call) => call.ref === ref && call.outcome === 'result'),
+      );
+
+      if (evidence.some((call) => call === undefined)) continue;
+
+      if (
+        goal.requiresWrite &&
+        !evidence.some((call) => {
+          const sourceTool = this.#definition.registry.get(call!.tool);
+
+          if (sourceTool === undefined || sourceTool.risk === 'read') return false;
+
+          if (call!.turn === 'current') return true;
+          const sourceIndex = this.#originalMessages.findIndex((message) => message.id === goal.source);
+
+          const resultIndex = this.#originalMessages.findIndex((message) =>
+            message.parts.some((part) => 'toolCallId' in part && part.toolCallId === call!.ref),
+          );
+
+          return sourceIndex >= 0 && resultIndex > sourceIndex;
+        })
+      )
+        continue;
       goal.status = 'completed';
       goal.evidence = check.evidence;
     }
+
     this.#turn.recordTask(task);
-    const pending = task.goals.filter(goal => goal.status === 'pending');
+    const pending = task.goals.filter((goal) => goal.status === 'pending');
+
     if (pending.length === 0) return true;
-    this.#turn.recordBlocker('missing_evidence', `Requested outcomes remain unfinished: ${pending.map(g => g.text).join('; ')}`, 'Complete the pending work, ask for required information, or explain the blocker.');
+    this.#turn.recordBlocker(
+      'missing_evidence',
+      `Requested outcomes remain unfinished: ${pending.map((g) => g.text).join('; ')}`,
+      'Complete the pending work, ask for required information, or explain the blocker.',
+    );
+
     return false;
   }
 
@@ -751,23 +971,27 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
 
   #agentContext(action: Extract<NextAction, { type: 'tool' }> | undefined): AgentContext {
     const conversation = [...this.#originalMessages];
+
     const awaiting =
       action === undefined
         ? undefined
-        : awaitingConfirmation(this.#turn.conversation).findLast(held => held.tool === action.tool);
+        : awaitingConfirmation(this.#turn.conversation).findLast((held) => held.tool === action.tool);
+
+    const intent =
+      action === undefined
+        ? undefined
+        : {
+            tool: action.tool,
+            awaitingInput: awaiting?.input,
+          };
+
     return {
       instructions: this.#definition.instructions,
       request: this.#request,
       conversation,
       messages: projectMessages(conversation),
       state: this.#turn.state,
-      action:
-        action === undefined
-          ? undefined
-          : {
-              tool: action.tool,
-              ...(awaiting === undefined ? {} : { awaitingInput: awaiting.input }),
-            },
+      action: intent,
       abortSignal: this.#abort.signal,
       generateText: this.#generation.generateText,
       generateObject: this.#generation.generateObject,
@@ -780,24 +1004,43 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     this.#candidates.clear();
     this.#catalog = [];
     this.#candidateVersion += 1;
+
     // A tool whose call awaits the user's confirmation cannot proceed this turn; asking the
     // user can. Other tools stay available for work that does not depend on it.
     const awaiting = new Set(
-      this.#turn.state.blockers.filter(blocker => blocker.kind === 'needs_confirmation').map(blocker => blocker.tool),
+      this.#turn.state.blockers
+        .filter((blocker) => blocker.kind === 'needs_confirmation')
+        .map((blocker) => blocker.tool),
     );
+
     for (const tool of this.#definition.registry.values()) {
-      const available = !awaiting.has(tool.name) && (tool.available === undefined || await abortable(this.#abort.signal, () => tool.available!(context)));
-      const catalogEntry = { name: tool.name, description: tool.description, risk: tool.risk, required: await requiredParameters(tool), available };
+      const available =
+        !awaiting.has(tool.name) &&
+        (tool.available === undefined || (await abortable(this.#abort.signal, () => tool.available!(context))));
+
+      const catalogEntry = {
+        name: tool.name,
+        description: tool.description,
+        risk: tool.risk,
+        required: await requiredParameters(tool),
+        available,
+      };
+
       this.#catalog.push(catalogEntry);
+
       if (!available) continue;
       const candidates: NonNullable<AvailableTool['candidates']>[number][] = [];
+
       if (tool.risk === 'read' && tool.candidates !== undefined) {
         const seen = new Set<string>();
+
         for (const candidate of await abortable(this.#abort.signal, () => tool.candidates!(context))) {
           const validated = await safeValidateTypes({ value: candidate.input, schema: tool.inputSchema });
+
           if (!validated.success || candidate.sources.length === 0) continue;
           const input = structuredClone(validated.value);
           const key = JSON.stringify(input);
+
           if (seen.has(key)) continue;
           seen.add(key);
           const id = `call:${this.#candidatePrefix}:${this.#candidateVersion}:${this.#candidates.size}`;
@@ -805,15 +1048,22 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
           candidates.push({ ...candidate, input: structuredClone(input), id });
         }
       }
-      tools.push({
+
+      const availableTool: AvailableTool = {
         name: tool.name,
         description: tool.description,
         risk: tool.risk,
         required: await requiredParameters(tool),
-        ...(this.#resolutionFailures.get(tool.name)?.revision === this.#resolutionVersion(tool) ? { resolutionBlocked: this.#resolutionFailures.get(tool.name)!.reason } : {}),
-        ...(candidates.length === 0 ? {} : { candidates }),
-      });
+      };
+
+      const failure = this.#resolutionFailures.get(tool.name);
+
+      if (failure?.revision === this.#resolutionVersion(tool)) availableTool.resolutionBlocked = failure.reason;
+
+      if (candidates.length > 0) availableTool.candidates = candidates;
+      tools.push(availableTool);
     }
+
     return tools;
   }
 
@@ -826,6 +1076,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       this.#turn.recordTransition('cancelled', 'Execution was cancelled; partial output is preserved.');
       this.#turn.writeText('This turn was cancelled.');
       this.#turn.finishMessage('cancelled');
+
       return;
     }
 
@@ -841,22 +1092,31 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
   /** Generate one reply. Reject empty text and tool markup without another model call. */
   async #respond(outcome: StopReason): Promise<string> {
     const responder = this.#definition.respond ?? defaultRespond;
+
     try {
-      const result = await abortable(this.#abort.signal, () => responder({
-        request: this.#request,
-        instructions: this.#definition.instructions,
-        stopReason: outcome,
-        state: this.#turn.state,
-        conversation: [...this.#originalMessages],
-        abortSignal: this.#abort.signal,
-        generateText: this.#generation.generateText,
-      }));
+      const result = await abortable(this.#abort.signal, () =>
+        responder({
+          request: this.#request,
+          instructions: this.#definition.instructions,
+          stopReason: outcome,
+          state: this.#turn.state,
+          conversation: [...this.#originalMessages],
+          abortSignal: this.#abort.signal,
+          generateText: this.#generation.generateText,
+        }),
+      );
+
       const text = result.text.trim();
+
       return contractViolation(text) === undefined ? text : statusResponse(outcome, this.#turn.state);
     } catch {
       return statusResponse(this.#callerSignal?.aborted === true ? 'cancelled' : outcome, this.#turn.state);
     }
   }
+}
+
+function isTextContent(content: ModelMessage['content']): content is string {
+  return typeof content === 'string';
 }
 
 // Special-token and tool-call syntax from model chat templates. A reply is text for the user;
@@ -869,12 +1129,14 @@ const toolCallMarkup = [
 
 function contractViolation(text: string): string | undefined {
   if (text.length === 0) return 'The previous draft was empty. Write the reply to the user.';
-  if (toolCallMarkup.some(pattern => pattern.test(text))) {
+
+  if (toolCallMarkup.some((pattern) => pattern.test(text))) {
     return (
       'The previous draft contained tool-call markup. This message cannot call tools; nothing it contains ' +
       'is executed. Write only plain text for the user, based on the tool results already available.'
     );
   }
+
   return undefined;
 }
 
@@ -899,7 +1161,7 @@ const outcomeGuidance: Record<StopReason, string> = {
   cancelled: 'The work was cancelled.',
 };
 
-const defaultRespond: RespondAdapter = async context => {
+const defaultRespond: RespondAdapter = async (context) => {
   const result = await context.generateText({
     purpose: 'response',
     system: [
@@ -908,29 +1170,31 @@ const defaultRespond: RespondAdapter = async context => {
       'Report only what the evidence supports. Never claim work that was not done.',
       outcomeGuidance[context.stopReason],
     ]
-      .filter(line => line.length > 0)
+      .filter((line) => line.length > 0)
       .join('\n'),
     prompt: [
       `Original request:\n${context.request}`,
       `Outcome: ${context.stopReason}`,
       `Conversation:\n${JSON.stringify(projectMessages(context.conversation))}`,
-      `Tool calls:\n${JSON.stringify(callHistory(context.conversation, context.state.observations).map(call => ({ ...call, result: presentResult(call.result, call.ref) })))}`,
+      `Tool calls:\n${JSON.stringify(callHistory(context.conversation, context.state.observations).map((call) => ({ ...call, result: presentResult(call.result, call.ref) })))}`,
       `Evidence:\n${digestObservations(context.state.observations)}`,
-        `Retained goals and constraints:\n${JSON.stringify(context.state.task)}`,
-        `Application inspections:\n${JSON.stringify(context.state.inspections)}`,
+      `Retained goals and constraints:\n${JSON.stringify(context.state.task)}`,
+      `Application inspections:\n${JSON.stringify(context.state.inspections)}`,
       context.state.blockers.length === 0
         ? ''
-        : `Blockers:\n${context.state.blockers.map(blocker => `- ${blocker.reason}`).join('\n')}`,
+        : `Blockers:\n${context.state.blockers.map((blocker) => `- ${blocker.reason}`).join('\n')}`,
     ]
-      .filter(line => line.length > 0)
+      .filter((line) => line.length > 0)
       .join('\n\n'),
     abortSignal: context.abortSignal,
   });
+
   return { text: result.text };
 };
 
 function statusResponse(outcome: StopReason, state: Readonly<ExecutionState>): string {
   const blocker = state.blockers.at(-1)?.reason;
+
   const base: Record<StopReason, string> = {
     completed: 'The requested work finished, but the summary could not be generated.',
     needs_input: 'More information is needed before this request can continue.',
@@ -939,5 +1203,6 @@ function statusResponse(outcome: StopReason, state: Readonly<ExecutionState>): s
     error: 'A runtime error stopped this turn.',
     cancelled: 'This turn was cancelled.',
   };
+
   return blocker === undefined ? base[outcome] : `${base[outcome]} Last blocker: ${blocker}`;
 }

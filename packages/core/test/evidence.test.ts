@@ -4,11 +4,13 @@ import { callHistory } from '../src/projection.ts';
 import { reduceState } from '../src/state.ts';
 import type { AgentToolExecutionOptions } from '../src/tool.ts';
 import type { AgentMessage } from '../src/types.ts';
+import type { JsonValue } from '../src/json.ts';
 
-function toolMessage(id: string, tool: string, input: unknown, output: unknown): AgentMessage {
+function toolMessage(id: string, tool: string, input: JsonValue, output: JsonValue): AgentMessage {
   return {
     id: `m-${id}`,
     role: 'assistant',
+    // SAFETY: the test fixture intentionally models this exact compile-time shape.
     parts: [{ type: `tool-${tool}`, toolCallId: id, state: 'output-available', input, output } as never],
   };
 }
@@ -27,7 +29,9 @@ const bundles = [
 ];
 
 function run(input: Parameters<ReturnType<typeof evidenceTool>['execute']>[0], conversation: AgentMessage[]) {
-  const options = { conversation, state: reduceState([]) } as unknown as AgentToolExecutionOptions;
+  // SAFETY: the test fixture intentionally models this exact compile-time shape.
+  const options = { conversation, state: reduceState([]) } as AgentToolExecutionOptions;
+
   return evidenceTool().execute(input, options);
 }
 
@@ -36,12 +40,12 @@ describe('call history', () => {
     const current = toolMessage('call_1', 'get_users', {}, [{ user_id: 'u1' }]);
     const state = reduceState([current]);
     const history = callHistory([current], state.observations);
-    expect(history.map(call => [call.ref, call.turn])).toEqual([['call_1', 'current']]);
+    expect(history.map((call) => [call.ref, call.turn])).toEqual([['call_1', 'current']]);
   });
 
   test('earlier calls keep their references', () => {
     const earlier = toolMessage('call_0', 'get_users', {}, []);
-    expect(callHistory([earlier], []).map(call => [call.ref, call.turn])).toEqual([['call_0', 'earlier']]);
+    expect(callHistory([earlier], []).map((call) => [call.ref, call.turn])).toEqual([['call_0', 'earlier']]);
   });
 });
 
@@ -50,7 +54,7 @@ describe('evidence tool', () => {
 
   test('sorts the full result, summing across components, with missing keys last', async () => {
     const page = await run({ ref: 'call_7', sortBy: '[].prices.premium' }, conversation);
-    expect(page.records.map(entry => [entry.index, entry.sortValue])).toEqual([
+    expect(page.records.map((entry) => [entry.index, entry.sortValue])).toEqual([
       [1, 550],
       [3, 650],
       [0, 900],
