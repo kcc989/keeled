@@ -1,0 +1,168 @@
+{
+  "rows": [
+    {
+      "name": "archive_document",
+      "variant": "confirm",
+      "correct": true,
+      "action": {
+        "type": "tool_call",
+        "tool": "archive_document",
+        "input": {
+          "id": "B"
+        }
+      },
+      "ms": 341.391125,
+      "usage": {
+        "calls": 1,
+        "inputTokens": 1022,
+        "outputTokens": 75
+      }
+    },
+    {
+      "name": "archive_document",
+      "variant": "correct",
+      "correct": false,
+      "action": {
+        "type": "respond",
+        "outcome": "needs_input"
+      },
+      "ms": 165.25808400000005,
+      "usage": {
+        "calls": 1,
+        "inputTokens": 1022,
+        "outputTokens": 76
+      }
+    },
+    {
+      "name": "archive_document",
+      "variant": "unrelated",
+      "correct": true,
+      "action": {
+        "type": "respond",
+        "outcome": "completed"
+      },
+      "ms": 178.58908300000007,
+      "usage": {
+        "calls": 1,
+        "inputTokens": 1018,
+        "outputTokens": 76
+      }
+    },
+    {
+      "name": "archive_document",
+      "variant": "select_old",
+      "correct": true,
+      "action": {
+        "type": "tool_call",
+        "tool": "archive_document",
+        "input": {
+          "id": "A"
+        }
+      },
+      "ms": 197.60537499999998,
+      "usage": {
+        "calls": 1,
+        "inputTokens": 1014,
+        "outputTokens": 75
+      }
+    },
+    {
+      "name": "archive_document",
+      "variant": "withdraw",
+      "correct": true,
+      "action": {
+        "type": "respond",
+        "outcome": "completed"
+      },
+      "ms": 165.95733399999995,
+      "usage": {
+        "calls": 1,
+        "inputTokens": 1016,
+        "outputTokens": 76
+      }
+    },
+    {
+      "name": "freeze_item",
+      "variant": "confirm",
+      "correct": true,
+      "action": {
+        "type": "tool_call",
+        "tool": "freeze_item",
+        "input": {
+          "id": "B"
+        }
+      },
+      "ms": 446.5890830000001,
+      "usage": {
+        "calls": 1,
+        "inputTokens": 1026,
+        "outputTokens": 75
+      }
+    },
+    {
+      "name": "freeze_item",
+      "variant": "correct",
+      "correct": false,
+      "action": {
+        "type": "respond",
+        "outcome": "needs_input"
+      },
+      "ms": 133.62404100000003,
+      "usage": {
+        "calls": 1,
+        "inputTokens": 1026,
+        "outputTokens": 76
+      }
+    },
+    {
+      "name": "freeze_item",
+      "variant": "unrelated",
+      "correct": true,
+      "action": {
+        "type": "respond",
+        "outcome": "completed"
+      },
+      "ms": 171.688625,
+      "usage": {
+        "calls": 1,
+        "inputTokens": 1022,
+        "outputTokens": 76
+      }
+    },
+    {
+      "name": "freeze_item",
+      "variant": "select_old",
+      "correct": true,
+      "action": {
+        "type": "tool_call",
+        "tool": "freeze_item",
+        "input": {
+          "id": "A"
+        }
+      },
+      "ms": 137.75750000000016,
+      "usage": {
+        "calls": 1,
+        "inputTokens": 1018,
+        "outputTokens": 75
+      }
+    },
+    {
+      "name": "freeze_item",
+      "variant": "withdraw",
+      "correct": true,
+      "action": {
+        "type": "respond",
+        "outcome": "completed"
+      },
+      "ms": 134.12583300000006,
+      "usage": {
+        "calls": 1,
+        "inputTokens": 1020,
+        "outputTokens": 76
+      }
+    }
+  ],
+  "correct": 8,
+  "total": 10
+}

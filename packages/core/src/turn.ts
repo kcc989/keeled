@@ -121,6 +121,14 @@ export class Turn {
     };
   }
 
+  recordKnowledge(update: import('./knowledge.ts').KnowledgeUpdate): void {
+    this.#record({ type: 'data-knowledge', data: update });
+  }
+
+  recordSource(source: import('./context.ts').CatalogSource): void {
+    this.#record({ type: 'data-catalog', data: source });
+  }
+
   recordInspection(inspection: InspectionRecord): void {
     this.#record({ type: 'data-inspection', data: inspection });
   }
@@ -351,6 +359,8 @@ export class Turn {
 /** Mirrors the SDK's chunk-to-part assembly for the parts this runtime writes. */
 function toPart(chunk: Chunk, parts: AgentMessage['parts']): AgentMessage['parts'][number] | undefined {
   switch (chunk.type) {
+    case 'data-knowledge':
+    case 'data-catalog':
     case 'data-inspection':
     case 'data-operation':
     case 'data-task':

@@ -30,6 +30,7 @@ export interface InputInspection {
 }
 
 export interface AgentContext {
+  readonly store: import('./context.ts').ContextStore;
   readonly instructions: string;
   readonly request: string;
   readonly conversation: AgentMessage[];

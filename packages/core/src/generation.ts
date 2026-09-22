@@ -1,4 +1,4 @@
-import { Output, generateText, jsonSchema, tool } from 'ai';
+import { NoObjectGeneratedError, Output, generateText, jsonSchema, tool } from 'ai';
 import type { LanguageModel } from 'ai';
 import { z } from 'zod';
 import { HarnessError } from './errors.ts';
@@ -40,11 +40,20 @@ export class GenerationHost implements ManagedGeneration {
   ): Promise<GeneratedObjectResult<OBJECT>> => {
     const { schema, name, description, ...rest } = options;
 
-    const result = await this.#tracked({ ...rest, purpose: options.purpose ?? name }, true, () =>
-      generateText({
-        ...this.#callOptions(rest),
-        output: Output.object<OBJECT>({ schema, name, description }),
-      }),
+    const result = await this.#tracked(
+      { ...rest, purpose: options.purpose ?? name },
+      true,
+      () =>
+        generateText({
+          ...this.#callOptions(rest),
+          output: Output.object<OBJECT>({ schema, name, description }),
+        }),
+      (generated) => {
+        // Structured output may be parsed lazily by the SDK. Keep validation in the tracked call.
+        if (generated.output === undefined) throw new HarnessError('Structured generation produced no object.');
+
+        return undefined;
+      },
     );
 
     this.#account(result.totalUsage);
@@ -105,7 +114,12 @@ export class GenerationHost implements ManagedGeneration {
 
   async #tracked<
     T extends {
-      totalUsage: { inputTokens?: number; outputTokens?: number; outputTokenDetails?: { reasoningTokens?: number } };
+      totalUsage: {
+        inputTokens?: number;
+        outputTokens?: number;
+        inputTokenDetails?: { cacheReadTokens?: number; cacheWriteTokens?: number };
+        outputTokenDetails?: { reasoningTokens?: number };
+      };
     },
   >(
     options: ModelCallOptions,
@@ -114,6 +128,7 @@ export class GenerationHost implements ManagedGeneration {
     detail?: (result: T) => JsonValue,
   ): Promise<T> {
     const start = performance.now();
+    let returnedUsage: T['totalUsage'] | undefined;
     const identity = modelIdentity(options.model ?? this.#options.defaultModel);
 
     const emit = (detail: Partial<import('./types.ts').GenerationTrace>) => {
@@ -135,8 +150,11 @@ export class GenerationHost implements ManagedGeneration {
       mergeSignals(this.#options.abortSignal, options.abortSignal).throwIfAborted();
       this.#options.usage.model.calls += 1;
       const result = await run();
+      returnedUsage = result.totalUsage;
       emit({
         inputTokens: result.totalUsage.inputTokens,
+        cacheReadTokens: result.totalUsage.inputTokenDetails?.cacheReadTokens,
+        cacheWriteTokens: result.totalUsage.inputTokenDetails?.cacheWriteTokens,
         outputTokens: result.totalUsage.outputTokens,
         reasoningTokens: result.totalUsage.outputTokenDetails?.reasoningTokens,
         detail: detail?.(result),
@@ -144,7 +162,17 @@ export class GenerationHost implements ManagedGeneration {
 
       return result;
     } catch (error) {
-      emit({ status: 'error', error: error instanceof Error ? error.message : String(error) });
+      const failedUsage = returnedUsage ?? (NoObjectGeneratedError.isInstance(error) ? error.usage : undefined);
+
+      if (failedUsage !== undefined) this.#account(failedUsage);
+      emit({
+        status: 'error',
+        error: error instanceof Error ? error.message : String(error),
+        inputTokens: failedUsage?.inputTokens,
+        cacheReadTokens: failedUsage?.inputTokenDetails?.cacheReadTokens,
+        cacheWriteTokens: failedUsage?.inputTokenDetails?.cacheWriteTokens,
+        outputTokens: failedUsage?.outputTokens,
+      });
       throw error;
     }
   }

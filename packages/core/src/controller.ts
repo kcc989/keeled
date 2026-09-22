@@ -29,6 +29,8 @@ export interface BudgetView {
 }
 
 export interface ControllerContext {
+  readonly store?: import('./context.ts').ContextStore;
+  readonly decisionContext?: string;
   readonly request: string;
   readonly instructions: string;
   readonly conversation: readonly AgentMessage[];
@@ -103,6 +105,7 @@ export interface Authorization {
 
 export interface Controller {
   readonly name: string;
+  judgeFacts?: import('./context.ts').FactJudge;
   /** Joint controllers supply complete tool calls and cannot use custom input resolvers. */
   readonly inputMode?: 'joint';
   /** Selects the next tool or a reply. */

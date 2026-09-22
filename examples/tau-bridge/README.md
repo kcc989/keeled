@@ -95,7 +95,7 @@ bun run tau3:first airline 10 --max-concurrency 1
 | `KEELED_MODEL`         | Keeled `.env`   | OpenRouter model id, e.g. `anthropic/claude-sonnet-4.5`               |
 | `OPENROUTER_PROVIDERS` | optional        | Provider order, default `together,modal`; no fallback beyond the list |
 | `OPENROUTER_API_KEY`   | τ³-bench `.env` | User simulator                                                        |
-| `TAU2_USER_LLM`        | optional        | User simulator model, default `openrouter/openai/gpt-4.1`             |
+| `TAU2_USER_LLM`        | optional        | User simulator model, default `openrouter/google/gemini-2.5-flash`    |
 | `TAU2_DIR`             | optional        | τ³-bench checkout, default `~/projects/tau2-bench`                    |
 
 The two key sets stay separate. τ³-bench never overrides variables already in its

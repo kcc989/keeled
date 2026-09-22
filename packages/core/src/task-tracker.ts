@@ -1,9 +1,11 @@
 import { jsonSchema, type LanguageModel } from 'ai';
-import { callHistory } from './projection.ts';
+import { decisionContext, taskUpdateContext } from './context.ts';
 import type { TaskPatch, GoalEvidence, TaskTracker } from './task.ts';
 
 /** One additive update per user message, not a planner on every tool-selection cycle. */
-export function modelTaskTracker(options: { extractionModel?: LanguageModel } = {}): TaskTracker {
+export function modelTaskTracker(
+  options: { extractionModel?: LanguageModel; verificationModel?: LanguageModel } = {},
+): TaskTracker {
   return {
     async update(context) {
       const result = await context.generateObject<TaskPatch>({
@@ -60,11 +62,7 @@ export function modelTaskTracker(options: { extractionModel?: LanguageModel } = 
           'Withdraw an item only if the user explicitly retracts or replaces it, citing their exact words. ' +
           'Keep separate requested effects as separate goals. Record limits on resource scope, quantities, timing, and allowed operations as constraints. ' +
           'Do not mark anything completed; execution evidence decides completion. Return empty lists if there is no update.',
-        prompt: JSON.stringify({
-          existing: context.state.task,
-          message: context.request,
-          conversation: context.messages,
-        }),
+        prompt: taskUpdateContext(context),
       });
 
       return result.object;
@@ -73,6 +71,7 @@ export function modelTaskTracker(options: { extractionModel?: LanguageModel } = 
       const result = await context.generateObject<{ checks: GoalEvidence[] }>({
         name: 'goal_evidence',
         purpose: 'completion_verify',
+        model: options.verificationModel,
         schema: jsonSchema({
           type: 'object',
           properties: {
@@ -97,10 +96,10 @@ export function modelTaskTracker(options: { extractionModel?: LanguageModel } = 
           'Check every requested record and all retained constraints. Completing a prerequisite does not complete a later dependent goal. ' +
           'For information requests, evidence must support the complete answer and any arithmetic. ' +
           'If evidence is missing or ambiguous, return complete=false.',
-        prompt: JSON.stringify({
-          task: context.state.task,
-          history: callHistory(context.conversation, context.state.observations),
-        }),
+        prompt: await decisionContext(
+          context,
+          'Verify completion against successful tool outcomes; cite call source references.',
+        ),
       });
 
       return result.object.checks;

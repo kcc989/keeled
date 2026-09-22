@@ -1,0 +1,452 @@
+{
+  "modelId": "deepseek/deepseek-v4.1-flash",
+  "providers": ["together", "modal"],
+  "settings": {
+    "temperature": 0,
+    "reasoning": false,
+    "trials": 2,
+    "cases": 10,
+    "recordsPerCase": 160
+  },
+  "limits": [
+    "Fixed-state QA isolates context preparation; it is not a full agent or write-safety evaluation.",
+    "Synthetic labeled tasks are deliberately simple and cover two settings; this does not establish broad accuracy.",
+    "Trial order alternates to reduce provider and cache-order bias."
+  ],
+  "groups": {
+    "full": {
+      "correct": 20,
+      "cases": 20,
+      "median_ms": 292.9921044999992,
+      "p90_ms": 737.707207999998,
+      "llm_input_tokens": 155200,
+      "llm_cached_input_tokens": 139392,
+      "llm_output_tokens": 131,
+      "jev_input_tokens": 0,
+      "median_prepare_ms": 0.0,
+      "median_warm_query_ms": 0.0,
+      "labeled_source_hits": null,
+      "labeled_source_cases": null,
+      "estimated_cost_together": 0.005735951999999999,
+      "estimated_cost_modal": 0.00908136
+    },
+    "catalog": {
+      "correct": 20,
+      "cases": 20,
+      "median_ms": 739.4411040000005,
+      "p90_ms": 1504.8407500000003,
+      "llm_input_tokens": 61680,
+      "llm_cached_input_tokens": 30080,
+      "llm_output_tokens": 128,
+      "jev_input_tokens": 438054,
+      "median_prepare_ms": 384.56400049999957,
+      "median_warm_query_ms": 0.28185449999909906,
+      "labeled_source_hits": 16,
+      "labeled_source_cases": 16,
+      "estimated_cost_together": 0.028212347999999998,
+      "estimated_cost_modal": 0.028934268
+    }
+  },
+  "per_case": [
+    {
+      "case": "files-7",
+      "trial": 0,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 637.45825,
+      "inputTokens": 8082,
+      "cacheReadTokens": 0,
+      "error": null
+    },
+    {
+      "case": "files-7",
+      "trial": 0,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 1078.7789159999998,
+      "inputTokens": 2938,
+      "cacheReadTokens": 0,
+      "error": null
+    },
+    {
+      "case": "files-43",
+      "trial": 0,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 1901.347875,
+      "inputTokens": 2936,
+      "cacheReadTokens": 0,
+      "error": null
+    },
+    {
+      "case": "files-43",
+      "trial": 0,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 235.53529200000003,
+      "inputTokens": 8082,
+      "cacheReadTokens": 8064,
+      "error": null
+    },
+    {
+      "case": "files-91",
+      "trial": 0,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 289.4680840000001,
+      "inputTokens": 8082,
+      "cacheReadTokens": 8064,
+      "error": null
+    },
+    {
+      "case": "files-91",
+      "trial": 0,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 1504.8407500000003,
+      "inputTokens": 2938,
+      "cacheReadTokens": 0,
+      "error": null
+    },
+    {
+      "case": "files-137",
+      "trial": 0,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 673.4468340000003,
+      "inputTokens": 2938,
+      "cacheReadTokens": 0,
+      "error": null
+    },
+    {
+      "case": "files-137",
+      "trial": 0,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 254.18787500000053,
+      "inputTokens": 8082,
+      "cacheReadTokens": 8064,
+      "error": null
+    },
+    {
+      "case": "files-999",
+      "trial": 0,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 246.6516249999995,
+      "inputTokens": 8082,
+      "cacheReadTokens": 8064,
+      "error": null
+    },
+    {
+      "case": "files-999",
+      "trial": 0,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 737.3837079999994,
+      "inputTokens": 2827,
+      "cacheReadTokens": 0,
+      "error": null
+    },
+    {
+      "case": "inventory-7",
+      "trial": 0,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 738.397500000001,
+      "inputTokens": 3253,
+      "cacheReadTokens": 0,
+      "error": null
+    },
+    {
+      "case": "inventory-7",
+      "trial": 0,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 623.6598749999994,
+      "inputTokens": 7438,
+      "cacheReadTokens": 0,
+      "error": null
+    },
+    {
+      "case": "inventory-43",
+      "trial": 0,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 250.23520800000006,
+      "inputTokens": 7438,
+      "cacheReadTokens": 7424,
+      "error": null
+    },
+    {
+      "case": "inventory-43",
+      "trial": 0,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 804.5693749999991,
+      "inputTokens": 3255,
+      "cacheReadTokens": 0,
+      "error": null
+    },
+    {
+      "case": "inventory-91",
+      "trial": 0,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 726.5702920000003,
+      "inputTokens": 3253,
+      "cacheReadTokens": 0,
+      "error": null
+    },
+    {
+      "case": "inventory-91",
+      "trial": 0,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 370.84499999999935,
+      "inputTokens": 7438,
+      "cacheReadTokens": 7424,
+      "error": null
+    },
+    {
+      "case": "inventory-137",
+      "trial": 0,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 269.4161669999994,
+      "inputTokens": 7438,
+      "cacheReadTokens": 7424,
+      "error": null
+    },
+    {
+      "case": "inventory-137",
+      "trial": 0,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 826.6047080000008,
+      "inputTokens": 3251,
+      "cacheReadTokens": 0,
+      "error": null
+    },
+    {
+      "case": "inventory-999",
+      "trial": 0,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 690.7032920000001,
+      "inputTokens": 3251,
+      "cacheReadTokens": 0,
+      "error": null
+    },
+    {
+      "case": "inventory-999",
+      "trial": 0,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 279.94204100000024,
+      "inputTokens": 7438,
+      "cacheReadTokens": 7424,
+      "error": null
+    },
+    {
+      "case": "files-7",
+      "trial": 1,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 740.484708,
+      "inputTokens": 2938,
+      "cacheReadTokens": 2816,
+      "error": null
+    },
+    {
+      "case": "files-7",
+      "trial": 1,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 372.6840000000011,
+      "inputTokens": 8082,
+      "cacheReadTokens": 8064,
+      "error": null
+    },
+    {
+      "case": "files-43",
+      "trial": 1,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 266.9100000000017,
+      "inputTokens": 8082,
+      "cacheReadTokens": 8064,
+      "error": null
+    },
+    {
+      "case": "files-43",
+      "trial": 1,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 671.6227080000008,
+      "inputTokens": 2936,
+      "cacheReadTokens": 2816,
+      "error": null
+    },
+    {
+      "case": "files-91",
+      "trial": 1,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 825.2604579999988,
+      "inputTokens": 2938,
+      "cacheReadTokens": 2816,
+      "error": null
+    },
+    {
+      "case": "files-91",
+      "trial": 1,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 737.707207999998,
+      "inputTokens": 8082,
+      "cacheReadTokens": 8064,
+      "error": null
+    },
+    {
+      "case": "files-137",
+      "trial": 1,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 1421.8344169999982,
+      "inputTokens": 8082,
+      "cacheReadTokens": 8064,
+      "error": null
+    },
+    {
+      "case": "files-137",
+      "trial": 1,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 1605.3336249999993,
+      "inputTokens": 2938,
+      "cacheReadTokens": 2816,
+      "error": null
+    },
+    {
+      "case": "files-999",
+      "trial": 1,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 639.0357909999984,
+      "inputTokens": 2827,
+      "cacheReadTokens": 2816,
+      "error": null
+    },
+    {
+      "case": "files-999",
+      "trial": 1,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 628.4256669999995,
+      "inputTokens": 8082,
+      "cacheReadTokens": 8064,
+      "error": null
+    },
+    {
+      "case": "inventory-7",
+      "trial": 1,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 283.18945800000074,
+      "inputTokens": 7438,
+      "cacheReadTokens": 7424,
+      "error": null
+    },
+    {
+      "case": "inventory-7",
+      "trial": 1,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 1246.2706660000003,
+      "inputTokens": 3253,
+      "cacheReadTokens": 3200,
+      "error": null
+    },
+    {
+      "case": "inventory-43",
+      "trial": 1,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 691.5736660000002,
+      "inputTokens": 3255,
+      "cacheReadTokens": 3200,
+      "error": null
+    },
+    {
+      "case": "inventory-43",
+      "trial": 1,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 258.7341669999987,
+      "inputTokens": 7438,
+      "cacheReadTokens": 7424,
+      "error": null
+    },
+    {
+      "case": "inventory-91",
+      "trial": 1,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 296.5161249999983,
+      "inputTokens": 7438,
+      "cacheReadTokens": 7424,
+      "error": null
+    },
+    {
+      "case": "inventory-91",
+      "trial": 1,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 632.1147920000003,
+      "inputTokens": 3253,
+      "cacheReadTokens": 3200,
+      "error": null
+    },
+    {
+      "case": "inventory-137",
+      "trial": 1,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 639.1295840000021,
+      "inputTokens": 3251,
+      "cacheReadTokens": 3200,
+      "error": null
+    },
+    {
+      "case": "inventory-137",
+      "trial": 1,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 348.90650000000096,
+      "inputTokens": 7438,
+      "cacheReadTokens": 7424,
+      "error": null
+    },
+    {
+      "case": "inventory-999",
+      "trial": 1,
+      "mode": "full",
+      "correct": true,
+      "milliseconds": 2296.370708000002,
+      "inputTokens": 7438,
+      "cacheReadTokens": 7424,
+      "error": null
+    },
+    {
+      "case": "inventory-999",
+      "trial": 1,
+      "mode": "catalog",
+      "correct": true,
+      "milliseconds": 812.7561249999999,
+      "inputTokens": 3251,
+      "cacheReadTokens": 3200,
+      "error": null
+    }
+  ]
+}

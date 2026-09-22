@@ -1,0 +1,24 @@
+{
+  "retrievedAt": "2026-09-21T23:50:32.227Z",
+  "source": "https://openrouter.ai/benchmarks/tau2-bench-airline#tool-calls",
+  "apiMeta": {
+    "as_of": "2026-09-19T16:00:28.638Z",
+    "version": "v1",
+    "source": "openrouter",
+    "source_url": "https://openrouter.ai/rankings",
+    "citation": "Source: OpenRouter evals (openrouter.ai) via OpenRouter (openrouter.ai/rankings).",
+    "model_count": 123,
+    "task_type": "agentic"
+  },
+  "model": {
+    "source": "openrouter",
+    "model_permaslug": "deepseek/deepseek-v4.1-flash-20260910",
+    "display_name": "DeepSeek: DeepSeek V4.1 Flash",
+    "benchmark_type": "tau_bench_verified_airline",
+    "accuracy": 0.7566669999999999,
+    "accuracy_stddev": 0.010000000000000009,
+    "avg_cost_per_task": 0.01828589,
+    "total_tasks": 100,
+    "last_run_timestamp": "2026-09-19T08:02:39.158Z"
+  }
+}

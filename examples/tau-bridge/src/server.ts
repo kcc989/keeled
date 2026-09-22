@@ -36,7 +36,11 @@ const jevController = jev();
 
 const controller =
   controllerName === 'joint'
-    ? jointController({ model: argumentsModel, authorize: jevController.authorize })
+    ? jointController({
+        model: argumentsModel,
+        authorize: jevController.authorize,
+        judgeFacts: jevController.judgeFacts,
+      })
     : jevController;
 
 const policy = { generationTimeoutMs: 60_000, turnTimeoutMs: 240_000 };

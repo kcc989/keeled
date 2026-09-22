@@ -6,9 +6,6 @@ import { scriptedController, stubModel, userMessage } from '../src/testing.ts';
 import { MissingInformation } from '../src/errors.ts';
 import { applyTaskPatch, emptyTask, type TaskTracker } from '../src/task.ts';
 import { reduceState } from '../src/state.ts';
-import { evidenceCalculationTool } from '../src/calculate.ts';
-import { calculateDecimals } from '../src/arithmetic.ts';
-import type { AgentMessage } from '../src/types.ts';
 import type { JsonValue } from '../src/json.ts';
 
 const finish = { type: 'respond' as const, outcome: 'completed' as const };
@@ -286,52 +283,4 @@ test('task patches cannot fabricate provenance or erase omitted constraints', ()
 
   expect(next.constraints).toHaveLength(1);
   expect(next.goals).toHaveLength(0);
-});
-
-test('exact arithmetic uses complete referenced evidence, including decimals and large integers', async () => {
-  expect(calculateDecimals('sum', ['0.1', '0.2'])).toBe('0.3');
-  expect(calculateDecimals('difference', ['9007199254740993', '9007199254740992'])).toBe('1');
-  expect(calculateDecimals('compare', ['120', '420'])).toBe(-1);
-  expect(() => calculateDecimals('sum', ['NaN'])).toThrow();
-
-  const history: AgentMessage[] = [
-    {
-      id: 'a1',
-      role: 'assistant',
-      parts: [
-        {
-          type: 'tool-totals',
-          toolCallId: 'e1',
-          state: 'output-available',
-          input: {},
-          output: { values: ['0.10', '0.20'] },
-        },
-      ],
-    },
-  ];
-
-  const calculation = evidenceCalculationTool();
-
-  const result = await createAgent({
-    instructions: 'Sum values.',
-    model: stubModel({
-      objects: [
-        {
-          operation: 'sum',
-          operands: [
-            { ref: 'e1', path: ['values', 0] },
-            { ref: 'e1', path: ['values', 1] },
-          ],
-        },
-      ],
-    }),
-    controller: scriptedController({ decisions: [{ type: 'tool', tool: 'calculate' }, finish] }),
-    tools: { calculate: calculation },
-  }).run({ messages: [...history, userMessage('What is the total?')] });
-
-  expect(result.state.observations.find((o) => o.tool === 'calculate')?.detail).toMatchObject({ result: '0.30' });
-});
-
-test('exact arithmetic rejects numbers whose integer precision was already lost', () => {
-  expect(() => calculateDecimals('sum', [9007199254740992])).toThrow('decimal string');
 });

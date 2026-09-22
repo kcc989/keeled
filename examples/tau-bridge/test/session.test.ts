@@ -241,7 +241,11 @@ describe('tau bridge session', () => {
       type: 'message',
       text: 'More information is needed before this request can continue.',
     });
-    expect(event.trace.filter((entry) => entry.kind === 'generate')).toHaveLength(1);
+    expect(
+      event.trace.filter(
+        (entry) => entry.kind === 'generate' && !JSON.stringify(entry.detail).includes('context_query'),
+      ),
+    ).toHaveLength(1);
   });
 
   test('rejects results for calls that are not pending', async () => {
@@ -251,4 +255,138 @@ describe('tau bridge session', () => {
     expect(() => s.sendUser('again')).toThrow(SessionConflictError);
     s.close();
   });
+});
+
+test('bridge consumers query facts with renamed contracts and keep risk-based input models', async () => {
+  const queries: string[] = [];
+
+  const controller = scriptedController({
+    decisions: [
+      { type: 'tool', tool: 'fetch_assets' },
+      { type: 'tool', tool: 'move_asset' },
+      { type: 'respond', outcome: 'completed' },
+    ],
+    authorize: () => ({ permitted: true, confirmed: true }),
+  });
+
+  controller.judgeFacts = async ({ question, candidates }) => {
+    queries.push(question);
+
+    return { judgments: candidates.map(({ fact }) => ({ id: fact.id, relevant: 1, contradicts: 0 })) };
+  };
+
+  const specs: ToolSpec[] = [
+    {
+      name: 'fetch_assets',
+      description: 'Find assets for a supplied folder.',
+      parameters: { type: 'object', properties: { folder: { type: 'string' } }, required: ['folder'] },
+      risk: 'read',
+    },
+    {
+      name: 'move_asset',
+      description: 'Move an observed asset to a folder.',
+      parameters: {
+        type: 'object',
+        properties: { asset: { type: 'string' }, destination: { type: 'string' } },
+        required: ['asset', 'destination'],
+      },
+      risk: 'write',
+    },
+  ];
+
+  const readModel = stubModel({ objects: [{ status: 'ready', arguments: { folder: 'drafts' } }], text: 'Moved.' });
+
+  const writeModel = stubModel({
+    objects: [{ status: 'ready', arguments: { asset: 'report-exact', destination: 'archive' } }],
+  });
+
+  const s = new Session({
+    trackTasks: false,
+    instructions: 'Only move the requested asset.',
+    tools: specs,
+    controller,
+    model: stubModel(),
+    argumentsModel: readModel,
+    writeArgumentsModel: writeModel,
+  });
+
+  const read = await s.sendUser('Move report-exact from drafts into archive.');
+  expect(read).toMatchObject({ type: 'tool_call', name: 'fetch_assets', arguments: { folder: 'drafts' } });
+
+  const write = await s.sendToolResult({
+    id: read.type === 'tool_call' ? read.id : '',
+    content: JSON.stringify({ assets: [{ asset: 'report-exact', owner: 'author' }] }),
+  });
+
+  expect(write).toMatchObject({
+    type: 'tool_call',
+    name: 'move_asset',
+    arguments: { asset: 'report-exact', destination: 'archive' },
+  });
+
+  const final = await s.sendToolResult({
+    id: write.type === 'tool_call' ? write.id : '',
+    content: JSON.stringify({ moved: 'report-exact' }),
+  });
+
+  expect(final).toMatchObject({ type: 'message', text: 'Moved.' });
+  expect(queries.some((question) => question.includes('Resolve arguments for fetch_assets'))).toBe(false);
+  expect(queries).toHaveLength(0);
+  expect(
+    s.messages.some((message) =>
+      message.parts.some((part) => part.type === 'data-catalog' && part.data.role === 'tool'),
+    ),
+  ).toBe(true);
+});
+
+test('final diagnostics preserve the exact denied action and deciding reason without executing it', async () => {
+  for (const name of ['revise_document', 'adjust_stock']) {
+    const controller = scriptedController({
+      decisions: [
+        { type: 'tool', tool: name },
+        { type: 'respond', outcome: 'blocked' },
+      ],
+      authorize: () => ({ permitted: false, confirmed: true }),
+    });
+
+    const s = new Session({
+      trackTasks: false,
+      instructions: 'Locked records cannot be changed.',
+      tools: [
+        {
+          name,
+          description: 'Change a record.',
+          risk: 'write',
+          parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+        },
+      ],
+      controller,
+      argumentsModel: stubModel({
+        objects: [{ status: 'ready', arguments: { id: 'R-17' } }],
+        text: 'The change did not run.',
+      }),
+      model: stubModel({
+        objects: [{ permitted: false, reason: 'R-17 is locked.', missing: '', evidence: [], timeSensitive: false }],
+      }),
+    });
+
+    const event = await s.sendUser('Change R-17. I confirm.');
+    expect(event).toMatchObject({ type: 'message', stopReason: 'blocked' });
+    const states = event.trace.filter((entry) => entry.kind === 'state');
+    expect(states).toHaveLength(1);
+    expect(states[0]!.detail).toMatchObject({
+      stopReason: 'blocked',
+      blockers: [
+        {
+          kind: 'policy_denied',
+          tool: name,
+          input: { id: 'R-17' },
+          reason: expect.stringContaining('R-17 is locked.'),
+        },
+      ],
+      uncertainOperations: [],
+    });
+    expect(s.messages.flatMap((message) => message.parts).some((part) => part.type === `tool-${name}`)).toBe(false);
+    s.close();
+  }
 });

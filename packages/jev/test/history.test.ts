@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { TypeSafeClient } from '@typesafe-ai/sdk';
 import {
-  presentResult,
   reduceState,
   type AgentMessage,
   type Blocker,
@@ -210,36 +209,6 @@ describe('what Jev is shown', () => {
     // Tool results are not repeated in the evidence list.
     expect(state['evidence']).toEqual([]);
   });
-
-  test('an oversized list is paged as complete records with its omission stated', () => {
-    const item = (n: number) => ({
-      item_number: `SKU${n}`,
-      workspace: 'HQ1',
-      folder: 'WH2',
-      available_units: { basic_standard: 3, standard: 9, premium: 2 },
-      prices: { basic_standard: 90 + n, standard: 180 + n, premium: 400 + n },
-    });
-
-    const items = Array.from({ length: 40 }, (_, n) => item(n));
-
-    // SAFETY: the test fixture intentionally models this exact compile-time shape.
-    const shown = presentResult(items, 'call_9', 2_000) as {
-      total: number;
-      records: typeof items;
-      omitted: { count: number; retrieve: string };
-    };
-
-    expect(shown.total).toBe(40);
-    expect(shown.records.length).toBeGreaterThan(0);
-    // Every shown record is complete, in its original order.
-    expect(shown.records).toEqual(items.slice(0, shown.records.length));
-    expect(shown.omitted.count).toBe(40 - shown.records.length);
-    expect(shown.omitted.retrieve).toBe(`evidence({"ref":"call_9","page":2,"pageSize":${shown.records.length}})`);
-  });
-
-  test('a result within budget is unchanged', () => {
-    expect(presentResult(userDetails, 'c1')).toBe(userDetails);
-  });
 });
 
 describe('authorization', () => {
@@ -315,4 +284,38 @@ describe('authorization', () => {
       ' An action awaits the user\'s explicit confirmation: cancel({"id":"X"}). Asking the user to confirm it resolves this.',
     );
   });
+});
+
+test('Jev selects exact held inputs without confusing resume labels with registered tools', async () => {
+  const c = context([]);
+  const input = { task_id: 'new', status: 'done' };
+  const available = [...c.availableTools, { ...c.availableTools[0]!, name: 'resume:1' }];
+  let criteria: JsonObject = {};
+
+  const client = testFixture<TypeSafeClient>({
+    systemOne: async (request: { questions: { action: { criteria: JsonObject } } }) => {
+      criteria = request.questions.action.criteria;
+
+      return {
+        answers: { action: { choice: ':resume:1', confidence: 1, probabilities: { ':resume:1': 1 } } },
+        usage: { input_tokens: 100, output_tokens: 4 },
+      };
+    },
+  });
+
+  const result = await jev({ client }).control({
+    ...c,
+    availableTools: available,
+    awaitingConfirmation: [
+      { tool: 'update_task_status', input: { task_id: 'old', status: 'done' }, reason: 'Earlier proposal.' },
+      { tool: 'update_task_status', input, reason: 'Latest proposal.' },
+      { tool: 'unavailable', input: { id: 'hidden' }, reason: 'Unavailable tool.' },
+    ],
+  });
+
+  expect(result.action).toEqual({ type: 'tool_call', tool: 'update_task_status', input });
+  expect(criteria).toHaveProperty('resume:1');
+  expect(criteria).toHaveProperty(':resume:1');
+  expect(Object.values(criteria).join('\n')).not.toContain('Unavailable tool.');
+  expect(result.action.type === 'tool_call' && result.action.input).not.toBe(input);
 });

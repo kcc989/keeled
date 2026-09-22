@@ -1,13 +1,19 @@
-import { presentResult, type ControllerContext } from '@keeled/core';
+import { type ControllerContext } from '@keeled/core';
 import type { JsonValue } from '@typesafe-ai/sdk';
 import { callHistory } from './history.ts';
 import { sdkValue } from './sdk.ts';
 
-/** Per-result size for the state document; larger results are paged, never cut. */
-const resultBudget = 4_000;
-
 /** The state document Jev evaluates. It is data, never instructions. */
 export function controllerState(context: ControllerContext): { [key: string]: JsonValue } {
+  if (context.decisionContext !== undefined)
+    return sdkValue({
+      decision_context: context.decisionContext,
+      tool_catalog: context.toolCatalog ?? context.availableTools,
+      awaiting_confirmation: context.awaitingConfirmation,
+      budget: context.budget,
+      calls: callHistory(context).map(({ result: _result, ...call }) => call),
+    });
+
   return sdkValue<{ [key: string]: JsonValue }>({
     latest_user_message: context.request,
     task: context.state.task,
@@ -25,7 +31,7 @@ export function controllerState(context: ControllerContext): { [key: string]: Js
         tool: call.tool,
         input: jsonValue(call.input),
         outcome: call.outcome,
-        result: jsonValue(presentResult(call.result, call.ref, resultBudget)),
+        result: jsonValue(call.result),
       })),
     // Everything else the turn has observed: blocked attempts and input errors.
     evidence: context.observations
@@ -35,7 +41,7 @@ export function controllerState(context: ControllerContext): { [key: string]: Js
         kind: observation.kind,
         tool: observation.tool ?? null,
         summary: observation.summary,
-        detail: jsonValue(presentResult(observation.detail, observation.id, resultBudget)),
+        detail: jsonValue(observation.detail),
       })),
     awaiting_confirmation: context.awaitingConfirmation.map((held) => ({
       tool: held.tool,

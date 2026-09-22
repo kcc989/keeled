@@ -1,3 +1,5 @@
+import { freeze } from './context.ts';
+import { applyKnowledgeUpdate, invalidateDerivedFacts } from './knowledge.ts';
 import { emptyTask } from './task.ts';
 import type {
   AgentMessage,
@@ -9,11 +11,12 @@ import type {
 } from './types.ts';
 import type { JsonValue } from './json.ts';
 
-export const reducerVersion = 4;
+export const reducerVersion = 5;
 
 export function emptyState(): ExecutionState {
   return {
     reducerVersion,
+    catalog: [],
     task: emptyTask(),
     uncertainOperations: [],
     inspections: [],
@@ -53,6 +56,8 @@ export function reduceState(messages: readonly AgentMessage[]): ExecutionState {
     }
   }
 
+  freeze(state.catalog);
+
   return state;
 }
 
@@ -60,6 +65,7 @@ function nextTurnState(completed: ExecutionState): ExecutionState {
   return {
     ...emptyState(),
     task: completed.task,
+    catalog: completed.catalog,
     uncertainOperations: completed.uncertainOperations,
     inspections: completed.inspections,
     stopReason: completed.stopReason,
@@ -73,6 +79,33 @@ interface ReduceContext {
 
 function applyPart(state: ExecutionState, part: AgentMessage['parts'][number], context: ReduceContext): void {
   const type = part.type;
+
+  if (part.type === 'data-knowledge') {
+    applyKnowledgeUpdate(state.catalog, part.data);
+
+    return;
+  }
+
+  if (part.type === 'data-catalog') {
+    const source = structuredClone(part.data);
+    const index = state.catalog.findIndex((entry) => entry.id === source.id && entry.version === source.version);
+
+    if (index < 0) {
+      for (const older of state.catalog.filter((entry) => entry.id === source.id && entry.version !== source.version)) {
+        older.status = 'superseded';
+
+        for (const fact of older.facts.filter((entry) => entry.status === 'active')) {
+          fact.status = 'superseded';
+          fact.revision += 1;
+        }
+      }
+
+      state.catalog.push(source);
+    } else state.catalog[index] = source;
+    invalidateDerivedFacts(state.catalog);
+
+    return;
+  }
 
   if (part.type === 'data-inspection') {
     state.inspections.push(structuredClone(part.data));

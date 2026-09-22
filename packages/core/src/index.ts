@@ -23,10 +23,6 @@ export type {
   SdkToolProjection,
 } from './tool.ts';
 
-export { evidenceTool } from './evidence.ts';
-
-export type { EvidencePage } from './evidence.ts';
-
 export { parseRespondLabel, respondLabels } from './controller.ts';
 
 export { jointController } from './joint-controller.ts';
@@ -53,8 +49,6 @@ export { emptyState, reduceState, reducerVersion } from './state.ts';
 export {
   awaitingConfirmation,
   callHistory,
-  defaultResultBudget,
-  presentResult,
   digestObservations,
   digestState,
   latestRequest,
@@ -111,10 +105,6 @@ export { emptyTask, applyTaskPatch } from './task.ts';
 
 export type { InputInspection } from './tool.ts';
 
-export { calculateDecimals } from './arithmetic.ts';
-
-export { evidenceCalculationTool } from './calculate.ts';
-
 export { modelTaskTracker } from './task-tracker.ts';
 
 export type { GenerationTrace } from './types.ts';
@@ -124,3 +114,19 @@ export type { JsonObject, JsonPrimitive, JsonValue } from './json.ts';
 export { isJsonValue, jsonNumber, jsonObject, jsonString } from './json.ts';
 
 export { stableHash } from './ids.ts';
+
+export { decisionContext, ContextQueryError } from './context.ts';
+
+export type {
+  ContextStore,
+  Fact,
+  SourceSpan,
+  SourceExcerpt,
+  FactQueryResult,
+  FactJudge,
+  FactJudgmentRequest,
+  FactJudgmentResult,
+  CatalogSource,
+} from './context.ts';
+
+export { resolveToolInput } from './input.ts';

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { HarnessError } from './errors.ts';
 import { isJsonValue } from './json.ts';
-import { callHistory, digestObservations, presentResult, projectMessages } from './projection.ts';
+import { callHistory, digestObservations, projectMessages } from './projection.ts';
 import type { Controller, ControllerContext, NextAction } from './controller.ts';
 import type { GeneratedToolCall } from './types.ts';
 import type { LanguageModel } from 'ai';
@@ -23,6 +23,7 @@ export interface JointControllerOptions {
   model?: LanguageModel;
   /** Usually the existing Jev authorizer, so write policy stays fixed. */
   authorize?: Controller['authorize'];
+  judgeFacts?: Controller['judgeFacts'];
 }
 
 /**
@@ -34,6 +35,7 @@ export function jointController(options: JointControllerOptions = {}): Controlle
     name: 'joint',
     inputMode: 'joint',
     authorize: options.authorize,
+    judgeFacts: options.judgeFacts,
 
     async control(context: ControllerContext) {
       const tools = context.availableTools
@@ -62,7 +64,7 @@ export function jointController(options: JointControllerOptions = {}): Controlle
 
       const history = callHistory(context.conversation, context.observations).map((call) => ({
         ...call,
-        result: presentResult(call.result, call.ref),
+        result: call.result,
       }));
 
       const result = await context.generateToolCalls({
@@ -71,18 +73,20 @@ export function jointController(options: JointControllerOptions = {}): Controlle
         tools,
         system:
           'Choose exactly one next action. Call one supplied function. For an application tool, provide its complete input using only values supported by the request, conversation, and tool evidence. Never invent identifiers, constraints, or placeholders. Use a response function only when its description is true. The runtime alone executes application tools and enforces validation, policy, authorization, and confirmation.',
-        prompt: [
-          `Agent instructions:\n${context.instructions}`,
-          `Current request:\n${context.request}`,
-          `Conversation:\n${JSON.stringify(projectMessages(context.conversation))}`,
-          `Tool calls and results:\n${JSON.stringify(history)}`,
-          `Recent evidence:\n${digestObservations(context.observations)}`,
-          `Retained goals and constraints:\n${JSON.stringify(context.state.task)}`,
-          `Application inspections:\n${JSON.stringify(context.state.inspections)}`,
-          `Current blockers:\n${JSON.stringify(context.blockers.slice(-8))}`,
-          `Held confirmations:\n${JSON.stringify(context.awaitingConfirmation)}`,
-          `Work budget:\n${JSON.stringify(context.budget)}`,
-        ].join('\n\n'),
+        prompt:
+          context.decisionContext ??
+          [
+            `Agent instructions:\n${context.instructions}`,
+            `Current request:\n${context.request}`,
+            `Conversation:\n${JSON.stringify(projectMessages(context.conversation))}`,
+            `Tool calls and results:\n${JSON.stringify(history)}`,
+            `Recent evidence:\n${digestObservations(context.observations)}`,
+            `Retained goals and constraints:\n${JSON.stringify(context.state.task)}`,
+            `Application inspections:\n${JSON.stringify(context.state.inspections)}`,
+            `Current blockers:\n${JSON.stringify(context.blockers.slice(-8))}`,
+            `Held confirmations:\n${JSON.stringify(context.awaitingConfirmation)}`,
+            `Work budget:\n${JSON.stringify(context.budget)}`,
+          ].join('\n\n'),
         abortSignal: context.abortSignal,
       });
 

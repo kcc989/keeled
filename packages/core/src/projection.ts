@@ -2,7 +2,7 @@ import type { ModelMessage } from 'ai';
 import type { AgentMessage, Blocker, ExecutionState, Observation } from './types.ts';
 import type { AwaitingAction } from './controller.ts';
 import { stableHash } from './ids.ts';
-import { jsonObject, jsonString, type JsonObject, type JsonValue } from './json.ts';
+import { type JsonObject, type JsonValue } from './json.ts';
 
 /**
  * Explicit projection of conversation history for model calls.
@@ -56,8 +56,7 @@ export function digestObservations(observations: readonly Observation[], limit =
     .map((observation) => {
       const scope = observation.tool === undefined ? '' : ` [${observation.tool}]`;
 
-      const detail =
-        observation.detail === undefined ? '' : ` ${json(presentResult(observation.detail, observation.id))}`;
+      const detail = observation.detail === undefined ? '' : ` ${json(observation.detail)}`;
 
       return `- (${observation.kind})${scope} ${observation.summary}${detail}`;
     })
@@ -173,94 +172,6 @@ export function awaitingConfirmation(conversation: readonly AgentMessage[]): Awa
   }
 
   return [...pending.values()];
-}
-
-/** Default size, in characters of JSON, above which a result is presented in pages. */
-export const defaultResultBudget = 16_000;
-
-const longText = 2_000;
-
-/**
- * A result sized for a prompt, never altered in meaning. A result within `maxChars` is
- * returned unchanged. A larger list is shown as a page of complete records in their original
- * order, with an explicit note of how many records were omitted and how to retrieve them by
- * reference; an object keeps every field and pages only its large list fields. Records are
- * never reduced to their field names, and only individual strings longer than a few thousand
- * characters are shortened, with the omission stated.
- */
-export function presentResult(value: JsonValue, ref: string, maxChars = defaultResultBudget): JsonValue {
-  if (json(value).length <= maxChars) return value;
-
-  if (Array.isArray(value)) return pageOf(value, ref, undefined, maxChars);
-
-  const object = jsonObject(value);
-
-  if (object !== undefined) {
-    const fieldBudget = Math.max(1_000, Math.floor(maxChars / 4));
-
-    return Object.fromEntries(
-      Object.entries(object).map(([key, inner]) => {
-        if (Array.isArray(inner) && json(inner).length > fieldBudget)
-          return [key, pageOf(inner, ref, key, fieldBudget)];
-
-        return [key, shortenStrings(inner)];
-      }),
-    );
-  }
-
-  return shortenStrings(value);
-}
-
-/** The first page of a list: as many complete records as fit, and what was left out. */
-function pageOf(items: readonly JsonValue[], ref: string, path: string | undefined, maxChars: number): JsonObject {
-  const records: JsonValue[] = [];
-  let size = 0;
-
-  for (const item of items) {
-    const record = shortenStrings(item);
-    const length = json(record).length + 1;
-
-    if (records.length > 0 && size + length > maxChars) break;
-    records.push(record);
-    size += length;
-  }
-
-  const omitted = items.length - records.length;
-  const locator = path === undefined ? { ref } : { ref, path };
-
-  const page: JsonObject = {
-    total: items.length,
-    records,
-  };
-
-  if (omitted > 0) {
-    page['omitted'] = {
-      count: omitted,
-      retrieve: `evidence(${JSON.stringify({ ...locator, page: 2, pageSize: records.length })})`,
-    };
-  }
-
-  return page;
-}
-
-function shortenStrings(value: JsonValue): JsonValue {
-  const text = jsonString(value);
-
-  if (text !== undefined) {
-    return text.length <= longText
-      ? text
-      : `${text.slice(0, longText)}…[${text.length - longText} more characters omitted]`;
-  }
-
-  if (Array.isArray(value)) return value.map(shortenStrings);
-
-  const object = jsonObject(value);
-
-  if (object !== undefined) {
-    return Object.fromEntries(Object.entries(object).map(([key, inner]) => [key, shortenStrings(inner)]));
-  }
-
-  return value;
 }
 
 function json(value: JsonValue): string {

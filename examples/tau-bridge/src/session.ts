@@ -1,8 +1,6 @@
 import { type LanguageModel } from 'ai';
 import {
   createAgent,
-  evidenceTool,
-  evidenceCalculationTool,
   modelTaskTracker,
   type Agent,
   type AgentMessage,
@@ -28,7 +26,7 @@ export interface DecisionLog {
 }
 
 export interface TraceEntry {
-  kind: 'control' | 'authorize' | 'generate';
+  kind: 'control' | 'authorize' | 'generate' | 'state';
   ms: number;
   detail?: unknown;
 }
@@ -95,7 +93,9 @@ export class Session {
     this.#agent = createAgent({
       instructions: options.instructions,
       taskTracker:
-        options.trackTasks === false ? undefined : modelTaskTracker({ extractionModel: options.argumentsModel }),
+        options.trackTasks === false
+          ? undefined
+          : modelTaskTracker({ extractionModel: options.argumentsModel, verificationModel: options.argumentsModel }),
       controller: observe(options.controller, trace, (decision) => this.#decisions.push(logOf(decision))),
       model: options.model,
       onGeneration: (entry) => trace({ kind: 'generate', ms: entry.ms, detail: entry }),
@@ -107,8 +107,6 @@ export class Session {
           options.writeArgumentsModel === undefined ? undefined : options.writeArgumentsModel,
           options.jointInput === true ? 'joint' : 'resolved',
         ),
-        evidence: evidenceTool(),
-        arithmetic: evidenceCalculationTool(),
       },
       respond: respondWith(options.tools, options.argumentsModel === undefined ? undefined : options.argumentsModel),
       policy: options.policy,
@@ -130,6 +128,16 @@ export class Session {
       (result) => {
         this.#messages = result.messages;
         this.#running = false;
+        this.#trace.push({
+          kind: 'state',
+          ms: 0,
+          detail: {
+            stopReason: result.stopReason,
+            task: result.state.task,
+            blockers: result.state.blockers,
+            uncertainOperations: result.state.uncertainOperations,
+          },
+        });
         this.#emit({
           type: 'message',
           text: result.text.trim() || `The turn ended with status ${result.stopReason}; no response text was produced.`,
@@ -227,6 +235,8 @@ function observe(
       }
     },
   };
+
+  observed.judgeFacts = controller.judgeFacts?.bind(controller);
 
   if (controller.authorize !== undefined)
     observed.authorize = async (context: ControllerContext, action: PendingAction) => {

@@ -1,0 +1,867 @@
+{
+  "model": "deepseek/deepseek-v4.1-flash",
+  "rows": [
+    {
+      "domain": "documents",
+      "variant": "prerequisite",
+      "mode": "reference",
+      "status": "ready",
+      "args": {
+        "id": "R-17"
+      },
+      "correct": true,
+      "ms": 468.236917,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 454,
+          "outputTokens": 15
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 464,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 454,
+          "cacheReadTokens": 384,
+          "outputTokens": 15,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "documents",
+      "variant": "prerequisite",
+      "mode": "candidate",
+      "status": "ready",
+      "args": {
+        "id": "R-17"
+      },
+      "correct": true,
+      "ms": 284.793583,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 570,
+          "outputTokens": 15
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 284,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 570,
+          "cacheReadTokens": 512,
+          "outputTokens": 15,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "documents",
+      "variant": "unconfirmed",
+      "mode": "candidate",
+      "status": "ready",
+      "args": {
+        "id": "R-17"
+      },
+      "correct": true,
+      "ms": 225.85116700000003,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 595,
+          "outputTokens": 15
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 226,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 595,
+          "cacheReadTokens": 0,
+          "outputTokens": 15,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "documents",
+      "variant": "unconfirmed",
+      "mode": "reference",
+      "status": "missing",
+      "error": "MissingInformation: Missing information: Confirmation of the exact change (archiving document R-17) before executing the write, as required by the blocker and the rule that writes require confirmation of the exact change. This confirmation must come from the user. Also needed: verification that record R-17 is editable/not locked, which no tool result has established.",
+      "correct": false,
+      "ms": 538.3925839999999,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 479,
+          "outputTokens": 75
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 537,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 479,
+          "cacheReadTokens": 0,
+          "outputTokens": 75,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "documents",
+      "variant": "denied",
+      "mode": "reference",
+      "status": "missing",
+      "error": "MissingInformation: Missing information: A callable path: the only applicable write tool (revise_record) is policy-denied because R-17 is locked (editable:false per call:locked), and the instructions forbid changing locked records. The request cannot be fulfilled as stated; it needs either a different, unlocked target or an explicit authorization/policy change that lifts the lock. This denial should be reported to the user rather than retried. No tool call is being made.",
+      "correct": false,
+      "ms": 702.9003330000003,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 542,
+          "outputTokens": 100
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 702,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 542,
+          "cacheReadTokens": 0,
+          "outputTokens": 100,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "documents",
+      "variant": "denied",
+      "mode": "candidate",
+      "status": "ready",
+      "args": {
+        "id": "R-17"
+      },
+      "correct": true,
+      "ms": 316.57975000000033,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 661,
+          "outputTokens": 15
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 316,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 661,
+          "cacheReadTokens": 256,
+          "outputTokens": 15,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "documents",
+      "variant": "missing",
+      "mode": "candidate",
+      "status": "missing",
+      "error": "MissingInformation: Missing information: >id: the exact target record identifier is required but was not supplied; evidence needed: the user must provide the record's identifier. The request explicitly states the identifier was not supplied, and there is no other source from which to ground it. Meanwhile, confirmation or permission policy is not the blocker. The call is not ready to bind find_versions without the id.",
+      "correct": true,
+      "ms": 714.6269580000003,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 574,
+          "outputTokens": 83
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 714,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 574,
+          "cacheReadTokens": 512,
+          "outputTokens": 83,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "documents",
+      "variant": "missing",
+      "mode": "reference",
+      "status": "missing",
+      "error": "MissingInformation: Missing information: The record identifier (`id`) is required to call find_versions. It was not supplied in the request and has not been returned by any earlier tool call. It could come from the user or from a prior lookup/listing tool result that surfaces the record's exact identifier.",
+      "correct": true,
+      "ms": 456.9538749999997,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 456,
+          "outputTokens": 64
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 456,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 456,
+          "cacheReadTokens": 384,
+          "outputTokens": 64,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "documents",
+      "variant": "ambiguous",
+      "mode": "reference",
+      "status": "missing",
+      "error": "MissingInformation: Missing information: Which of the two records to inspect; the user has not chosen between R-17 and R-18. This could come from the user selecting one of the two record IDs shown in call:records. Unless a selection is made, no exact id can be supplied to find_versions. If the intent is to inspect both, say so explicitly and provide both calls.",
+      "correct": true,
+      "ms": 676.502708,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 528,
+          "outputTokens": 83
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 676,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 528,
+          "cacheReadTokens": 512,
+          "outputTokens": 83,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "documents",
+      "variant": "ambiguous",
+      "mode": "candidate",
+      "status": "missing",
+      "error": "MissingInformation: Missing information: id — the request says to inspect one of two records (R-17 or R-18) but does not specify which one; the user must choose the record to inspect.",
+      "correct": true,
+      "ms": 421.49041599999964,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 652,
+          "outputTokens": 45
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 421,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 652,
+          "cacheReadTokens": 640,
+          "outputTokens": 45,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "documents",
+      "variant": "repeat",
+      "mode": "candidate",
+      "status": "ready",
+      "args": {
+        "id": "R-17"
+      },
+      "correct": true,
+      "ms": 240.24575000000004,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 771,
+          "outputTokens": 15
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 240,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 771,
+          "cacheReadTokens": 768,
+          "outputTokens": 15,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "documents",
+      "variant": "repeat",
+      "mode": "reference",
+      "status": "ready",
+      "args": {
+        "id": "R-17"
+      },
+      "correct": true,
+      "ms": 327.65437499999916,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 628,
+          "outputTokens": 15
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 327,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 628,
+          "cacheReadTokens": 512,
+          "outputTokens": 15,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "inventory",
+      "variant": "prerequisite",
+      "mode": "reference",
+      "status": "ready",
+      "args": {
+        "id": "R-17"
+      },
+      "correct": true,
+      "ms": 277.7375000000002,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 453,
+          "outputTokens": 15
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 277,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 453,
+          "cacheReadTokens": 384,
+          "outputTokens": 15,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "inventory",
+      "variant": "prerequisite",
+      "mode": "candidate",
+      "status": "ready",
+      "args": {
+        "id": "R-17"
+      },
+      "correct": true,
+      "ms": 268.5642080000007,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 569,
+          "outputTokens": 15
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 267,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 569,
+          "cacheReadTokens": 512,
+          "outputTokens": 15,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "inventory",
+      "variant": "unconfirmed",
+      "mode": "candidate",
+      "status": "ready",
+      "args": {
+        "id": "R-17"
+      },
+      "correct": true,
+      "ms": 284.79025,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 599,
+          "outputTokens": 15
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 284,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 599,
+          "cacheReadTokens": 0,
+          "outputTokens": 15,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "inventory",
+      "variant": "unconfirmed",
+      "mode": "reference",
+      "status": "missing",
+      "error": "MissingInformation: Missing information: User confirmation of the exact change (freeze inventory record R-17) before executing the write, per the blocker needs_confirmation for adjust_item. This confirmation would come from the user in the conversation. Also, adjust_item is intended for freezing (a write) so confirmation is required; the record's editability has not been verified, and 'freeze' as the exact change has not been confirmed. Additionally, it is unclear whether freezing is a write to adjust_item or a separate lock operation, and no tool for locking is provided. Await user confirmation (and any clarification that freezing is the correct adjust_item operation) before calling adjust_item with {\"id\":\"R-17\"}.",
+      "correct": false,
+      "ms": 880.7529999999997,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 483,
+          "outputTokens": 151
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 880,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 483,
+          "cacheReadTokens": 0,
+          "outputTokens": 151,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "inventory",
+      "variant": "denied",
+      "mode": "reference",
+      "status": "missing",
+      "error": "MissingInformation: Missing information: A call to adjust_item with id R-17 was already denied because R-17 is locked and non-editable (source call:locked, editable:false), so the freeze write cannot be performed; no alternate editable target or unlock authorization has been provided.",
+      "correct": false,
+      "ms": 476.4190409999992,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 546,
+          "outputTokens": 61
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 476,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 546,
+          "cacheReadTokens": 0,
+          "outputTokens": 61,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "inventory",
+      "variant": "denied",
+      "mode": "candidate",
+      "status": "missing",
+      "error": "MissingInformation: Missing information: A write cannot proceed: R-17 is locked (editable:false) per complete source call:locked, so the requested freeze is policy-denied. The required `id` value \"R-17\" is grounded, but executing adjust_item would change a locked record. No permitted target for the freeze is available; evidence that R-17 is editable (or a different unlocked record id) is needed to make this call actionable.",
+      "correct": false,
+      "ms": 689.8805830000001,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 666,
+          "outputTokens": 97
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 689,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 666,
+          "cacheReadTokens": 256,
+          "outputTokens": 97,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "inventory",
+      "variant": "missing",
+      "mode": "candidate",
+      "status": "missing",
+      "error": "MissingInformation: Missing information: id: the exact target record identifier is required to inspect the record. The user explicitly stated they have not supplied it, and no evidence source contains an identifier. Need the record identifier from the user (or another grounded source).",
+      "correct": true,
+      "ms": 469.3659169999992,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 573,
+          "outputTokens": 54
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 469,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 573,
+          "cacheReadTokens": 512,
+          "outputTokens": 54,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "inventory",
+      "variant": "missing",
+      "mode": "reference",
+      "status": "missing",
+      "error": "MissingInformation: Missing information: The record identifier (id) is required to call inspect_options; the user did not supply it. It could come from the user or from a prior lookup/search tool result that resolves the user's record.",
+      "correct": true,
+      "ms": 369.98870800000077,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 455,
+          "outputTokens": 50
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 369,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 455,
+          "cacheReadTokens": 384,
+          "outputTokens": 50,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "inventory",
+      "variant": "ambiguous",
+      "mode": "reference",
+      "status": "missing",
+      "error": "MissingInformation: Missing information: The specific record to inspect. The request says only 'one of the two records,' and I have not chosen. An identifier is needed: either R-17 or R-18 from the earlier records listing. The choice belongs to the requester, so I cannot substitute a placeholder or pick one on my own.",
+      "correct": true,
+      "ms": 525.2937500000007,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 527,
+          "outputTokens": 72
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 524,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 527,
+          "cacheReadTokens": 512,
+          "outputTokens": 72,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "inventory",
+      "variant": "ambiguous",
+      "mode": "candidate",
+      "status": "missing",
+      "error": "MissingInformation: Missing information: .id is ambiguous: the user has not chosen which of the two records (R-17 or R-18) to inspect; need the exact target record identifier.",
+      "correct": true,
+      "ms": 389.44329199999993,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 651,
+          "outputTokens": 43
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 389,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 651,
+          "cacheReadTokens": 640,
+          "outputTokens": 43,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "inventory",
+      "variant": "repeat",
+      "mode": "candidate",
+      "status": "ready",
+      "args": {
+        "id": "R-17"
+      },
+      "correct": true,
+      "ms": 235.3000830000001,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 770,
+          "outputTokens": 15
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 235,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 770,
+          "cacheReadTokens": 768,
+          "outputTokens": 15,
+          "reasoningTokens": 0
+        }
+      ]
+    },
+    {
+      "domain": "inventory",
+      "variant": "repeat",
+      "mode": "reference",
+      "status": "ready",
+      "args": {
+        "id": "R-17"
+      },
+      "correct": true,
+      "ms": 230.5592919999999,
+      "usage": {
+        "model": {
+          "calls": 1,
+          "inputTokens": 627,
+          "outputTokens": 15
+        },
+        "controller": {
+          "calls": 0,
+          "inputTokens": 0,
+          "outputTokens": 0
+        }
+      },
+      "traces": [
+        {
+          "purpose": "tool_input",
+          "structured": true,
+          "ms": 230,
+          "status": "success",
+          "provider": "openrouter.chat",
+          "modelId": "deepseek/deepseek-v4.1-flash",
+          "inputTokens": 627,
+          "cacheReadTokens": 512,
+          "outputTokens": 15,
+          "reasoningTokens": 0
+        }
+      ]
+    }
+  ]
+}

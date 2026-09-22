@@ -122,6 +122,7 @@ export interface InspectionRecord {
 
 export interface ExecutionState {
   reducerVersion: number;
+  catalog: import('./context.ts').CatalogSource[];
   task: TaskContract;
   uncertainOperations: UncertainOperation[];
   inspections: InspectionRecord[];
@@ -169,6 +170,8 @@ export interface TransitionRecord {
 }
 
 export type AgentDataParts = {
+  knowledge: import('./knowledge.ts').KnowledgeUpdate;
+  catalog: import('./context.ts').CatalogSource;
   decision: DecisionRecord;
   blocker: BlockerRecord;
   transition: TransitionRecord;
@@ -193,6 +196,8 @@ export interface GenerationTrace {
   provider?: string;
   modelId?: string;
   inputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
   outputTokens?: number;
   reasoningTokens?: number;
   error?: string;

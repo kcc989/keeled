@@ -1,20 +1,15 @@
+import { createContextStore, decisionContext, ingestSource, messageSources, type ContextStore } from './context.ts';
 import { abortable } from './async.ts';
 import { validateInput } from './validation.ts';
 import { applyTaskPatch } from './task.ts';
 import { createUIMessageStream, createUIMessageStreamResponse } from 'ai';
 import { asSchema, jsonSchema, safeValidateTypes } from '@ai-sdk/provider-utils';
-import type { ModelMessage, UIMessageStreamOutcome } from 'ai';
+import type { UIMessageStreamOutcome } from 'ai';
 import { GenerationHost } from './generation.ts';
+import { argumentBindingInstructions } from './input.ts';
 import { createId, stableHash } from './ids.ts';
 import { MissingInformation, errorMessage, isAbortError } from './errors.ts';
-import {
-  awaitingConfirmation,
-  callHistory,
-  presentResult,
-  digestObservations,
-  latestRequest,
-  projectMessages,
-} from './projection.ts';
+import { awaitingConfirmation, callHistory, latestRequest, projectMessages } from './projection.ts';
 import { Turn, type Writer } from './turn.ts';
 import type { AgentContext, AgentToolExecutionOptions, AgentToolSet, RegisteredTool } from './tool.ts';
 import type { AvailableTool, ControllerContext, NextAction, PendingAction } from './controller.ts';
@@ -28,7 +23,7 @@ import type {
   UsageTotals,
 } from './types.ts';
 import type { AgentDefinition, RunOptions } from './agent.ts';
-import { isJsonValue, type JsonValue } from './json.ts';
+import { isJsonValue, jsonString, type JsonValue } from './json.ts';
 
 type Chunk = Parameters<Writer['write']>[0];
 
@@ -199,6 +194,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
   readonly #policy: ResolvedPolicy;
   readonly #turn: Turn;
   readonly #generation: GenerationHost;
+  readonly #store: ContextStore;
   readonly #abort: AbortController;
   readonly #usage: UsageTotals;
   readonly #request: string;
@@ -206,6 +202,8 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
   /** Refusals this turn, keyed by call, with the tool evidence they were made against. */
   readonly #refusals = new Map<string, Refusal>();
   readonly #resolutionFailures = new Map<string, { revision: string; reason: string }>();
+  #ingestedSources = 0;
+  readonly #processedSources = new Set<string>();
   #catalog: (AvailableTool & { available: boolean })[] = [];
   readonly #callerSignal: AbortSignal | undefined;
   #deadlineTimer: ReturnType<typeof setTimeout> | undefined;
@@ -262,6 +260,21 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       usage,
       messageId: createId('msg'),
     });
+    this.#store = createContextStore({
+      snapshot: () => {
+        this.#syncSources();
+
+        return this.#turn.state.catalog;
+      },
+      judge: definition.controller.judgeFacts?.bind(definition.controller),
+      abortSignal: this.#abort.signal,
+      account: (bucket) => {
+        usage.controller.calls += bucket.calls;
+        usage.controller.inputTokens += bucket.inputTokens;
+        usage.controller.outputTokens += bucket.outputTokens;
+      },
+      trace: definition.onGeneration,
+    });
     this.#generation = new GenerationHost({
       defaultModel: definition.model,
       onGeneration: definition.onGeneration,
@@ -275,94 +288,97 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     this.#turn.start();
     let outcome: StopReason = 'limit';
     let reportedAtEvidence: number | undefined;
-    const resumable = [...awaitingConfirmation(this.#turn.conversation)];
 
     try {
+      this.#syncSources();
+
+      for (const tool of this.#definition.registry.values()) {
+        const schema = await asSchema(tool.inputSchema).jsonSchema;
+        // SAFETY: AI SDK schemas are JSON Schema documents.
+        this.#saveSource(`contract:${tool.name}`, 'contract', {
+          name: tool.name,
+          description: tool.description,
+          schema: schema as JsonValue,
+        });
+      }
+
       const tracker = this.#definition.taskTracker;
       const user = this.#originalMessages.findLast((message) => message.role === 'user');
 
       if (tracker !== undefined && user !== undefined && !this.#turn.state.task.processedMessages.includes(user.id)) {
         const patch = await abortable(this.#abort.signal, () => tracker.update(this.#agentContext(undefined)));
         this.#turn.recordTask(applyTaskPatch(this.#turn.state.task, patch, user.id, this.#request));
+        this.#recordTaskFacts(patch, user.id);
       }
 
       while (this.#turn.hasWorkBudget()) {
         this.#turn.throwIfAborted();
         this.#turn.beginCycle();
 
-        const resume = resumable.shift();
+        const context = this.#turn.decisionContext(
+          await this.#availableTools(),
+          this.#catalog,
+          this.#generation.generateToolCalls,
+        );
 
-        if (resume !== undefined) {
-          const action: Extract<NextAction, { type: 'tool_call' }> = {
-            type: 'tool_call',
-            tool: resume.tool,
-            input: resume.input,
-          };
+        Object.assign(context, {
+          store: this.#store,
+          decisionContext: await decisionContext(
+            this.#agentContext(undefined),
+            'Select the next action using supplied tool contracts and evidence.',
+          ),
+        });
+        let control;
 
-          this.#turn.recordDecision({
-            action,
-            rationale: 'The runtime resumed the exact action held for confirmation.',
-          });
-          await this.#callTool(action);
-        } else {
-          const context = this.#turn.decisionContext(
-            await this.#availableTools(),
-            this.#catalog,
-            this.#generation.generateToolCalls,
+        try {
+          control = await abortable(this.#abort.signal, () => this.#definition.controller.control(context));
+        } catch (error) {
+          if (this.#turn.isAborted() || isAbortError(error)) throw error;
+
+          if (this.#definition.controller.inputMode !== 'joint') throw error;
+
+          this.#turn.recordTransition('controller-error', errorMessage(error));
+          this.#turn.recordBlocker(
+            'controller_error',
+            `Controller generation failed: ${errorMessage(error)}`,
+            'Choose one valid next action in the next cycle.',
           );
+          continue;
+        }
 
-          let control;
+        const action = this.#normalize(control.action, context);
 
-          try {
-            control = await abortable(this.#abort.signal, () => this.#definition.controller.control(context));
-          } catch (error) {
-            if (this.#turn.isAborted() || isAbortError(error)) throw error;
+        this.#turn.recordDecision({ ...control, action });
 
-            if (this.#definition.controller.inputMode !== 'joint') throw error;
-
-            this.#turn.recordTransition('controller-error', errorMessage(error));
+        if (action.type === 'respond') {
+          if (
+            action.outcome === 'completed' &&
+            this.#turn.state.uncertainOperations.some((operation) => operation.status === 'unknown')
+          ) {
             this.#turn.recordBlocker(
-              'controller_error',
-              `Controller generation failed: ${errorMessage(error)}`,
-              'Choose one valid next action in the next cycle.',
+              'missing_evidence',
+              'A write has an unknown outcome.',
+              'Verify the write outcome before declaring completion.',
             );
-            continue;
+            outcome = 'blocked';
+            break;
           }
 
-          const action = this.#normalize(control.action, context);
-
-          this.#turn.recordDecision({ ...control, action });
-
-          if (action.type === 'respond') {
-            if (
-              action.outcome === 'completed' &&
-              this.#turn.state.uncertainOperations.some((operation) => operation.status === 'unknown')
-            ) {
-              this.#turn.recordBlocker(
-                'missing_evidence',
-                'A write has an unknown outcome.',
-                'Verify the write outcome before declaring completion.',
-              );
+          if (action.outcome === 'completed' && !(await this.#verifyCompletion())) {
+            if (this.#lastCompletionCheck === this.#evidenceVersion()) {
               outcome = 'blocked';
               break;
             }
 
-            if (action.outcome === 'completed' && !(await this.#verifyCompletion())) {
-              if (this.#lastCompletionCheck === this.#evidenceVersion()) {
-                outcome = 'blocked';
-                break;
-              }
-
-              this.#lastCompletionCheck = this.#evidenceVersion();
-              continue;
-            }
-
-            outcome = action.outcome;
-            break;
+            this.#lastCompletionCheck = this.#evidenceVersion();
+            continue;
           }
 
-          await this.#callTool(action, { selectedFrom: context });
+          outcome = action.outcome;
+          break;
         }
+
+        await this.#callTool(action, { selectedFrom: context });
 
         // The first report at one evidence state is feedback. Repeating without any new
         // evidence ends the turn. Later evidence permits a fresh recovery attempt.
@@ -395,6 +411,18 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
     } catch (error) {
       outcome = this.#callerSignal?.aborted === true ? 'cancelled' : 'error';
       this.#turn.recordRuntimeError(error);
+
+      try {
+        this.#definition.onGeneration?.({
+          purpose: 'runtime_error',
+          structured: false,
+          ms: 0,
+          status: 'error',
+          error: errorMessage(error),
+        });
+      } catch {
+        /* Diagnostics do not alter execution. */
+      }
     }
 
     try {
@@ -712,6 +740,13 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       this.#generation.generateToolCalls,
     );
 
+    Object.assign(context, {
+      store: this.#store,
+      decisionContext: await decisionContext(
+        this.#agentContext(undefined),
+        `Authorize exact proposed action ${JSON.stringify(action)}`,
+      ),
+    });
     const answer = await abortable(this.#abort.signal, () => controller.authorize!(context, action));
 
     if (answer.usage !== undefined) this.#turn.accountController(answer.usage);
@@ -846,16 +881,6 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
   }
 
   async #verifyPermission(action: PendingAction, context: ControllerContext): Promise<PermissionVerdict> {
-    const calls = callHistory(context.conversation, context.observations)
-      .map(
-        (call) =>
-          `- [${call.ref}] ${call.tool}(${JSON.stringify(call.input)}) ` +
-          (call.outcome === 'result'
-            ? `returned ${JSON.stringify(presentResult(call.result, call.ref))}`
-            : `failed: ${String(call.result)}`),
-      )
-      .join('\n');
-
     const result = await this.#generation.generateObject<PermissionVerdict>({
       schema: permissionSchema,
       name: 'permission',
@@ -868,11 +893,8 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
         'is met, the action is not permitted. If the instructions set no condition for it, it is permitted. ' +
         'Do not consider whether the user has confirmed the action; that is checked separately.',
       prompt: [
-        `Agent instructions:\n${this.#definition.instructions}`,
-        `Conversation:\n${projectMessages(context.conversation)
-          .map((m) => `${m.role}: ${isTextContent(m.content) ? m.content : ''}`)
-          .join('\n')}`,
-        `Tool calls so far:\n${calls.length === 0 ? 'None.' : calls}`,
+        context.decisionContext ??
+          (await decisionContext(this.#agentContext(undefined), `Authorize proposed action ${JSON.stringify(action)}`)),
         `Proposed action:\n${action.tool} — ${action.description}\nInput: ${JSON.stringify(action.input)}\nVerified facts: ${JSON.stringify(action.facts)}\nEffects: ${JSON.stringify(action.effects)}\nRetained constraints: ${JSON.stringify(context.state.task.constraints)}`,
         'State whether it is permitted and give the deciding reason in one sentence. If it is not permitted only ' +
           'because the tool results cannot show whether a condition is met, set missing to the evidence that ' +
@@ -897,22 +919,15 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       purpose: 'tool_input',
       description: tool.description,
       model: tool.model ?? this.#definition.argumentsModel ?? this.#definition.model,
-      system:
-        'You produce the input for a single tool call. Return only values supported by the request and evidence. ' +
-        'Never invent user constraints, and never substitute placeholder values for missing required information.',
+      system: argumentBindingInstructions,
       prompt: [
-        `Agent instructions:\n${this.#definition.instructions}`,
         `Original request:\n${this.#request}`,
         `Tool:\n${tool.name} — ${tool.description}`,
         context.action?.awaitingInput === undefined
           ? ''
           : `Input of this tool's action awaiting the user's confirmation:\n${JSON.stringify(context.action.awaitingInput)}\n` +
             'If the user confirmed it unchanged, return exactly this input.',
-        `Conversation:\n${JSON.stringify(projectMessages(context.conversation))}`,
-        `Tool calls:\n${JSON.stringify(callHistory(context.conversation, context.state.observations).map((call) => ({ ...call, result: presentResult(call.result, call.ref) })))}`,
-        `Evidence:\n${digestObservations(context.state.observations)}`,
-        `Retained goals and constraints:\n${JSON.stringify(context.state.task)}`,
-        `Application inspections:\n${JSON.stringify(context.state.inspections)}`,
+        await decisionContext(context, `Resolve exact arguments for ${tool.name}: ${tool.description}`),
       ]
         .filter((line) => line.length > 0)
         .join('\n\n'),
@@ -997,8 +1012,107 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
 
   // --- context ----------------------------------------------------------
 
+  #recordTaskFacts(patch: import('./task.ts').TaskPatch, messageId: string): void {
+    const source = this.#turn.state.catalog.findLast(
+      (entry) => entry.id.startsWith(`message:${messageId}:`) && entry.role === 'user',
+    );
+
+    const text = source === undefined ? undefined : jsonString(source.content);
+
+    if (source === undefined || text === undefined) return;
+
+    const span = (quote: string) => ({
+      sourceId: source.id,
+      sourceVersion: source.version,
+      location: { start: text.indexOf(quote), end: text.indexOf(quote) + quote.length },
+    });
+
+    for (const item of [...patch.goals, ...patch.constraints]) {
+      if (!item.quote.trim() || !text.includes(item.quote)) continue;
+      const dependency = source.facts.find((fact) => jsonString(fact.value)?.includes(item.quote));
+
+      if (dependency === undefined) continue;
+      this.#turn.recordKnowledge({
+        type: 'derive',
+        fact: {
+          id: `task:${item.id}`,
+          revision: 1,
+          kind: 'passage',
+          value: item.quote,
+          origin: 'derived',
+          status: 'active',
+          sources: [span(item.quote)],
+        },
+        dependencies: [{ id: dependency.id, revision: dependency.revision }],
+      });
+    }
+
+    for (const removal of patch.withdrawals) {
+      if (!removal.quote.trim() || !text.includes(removal.quote)) continue;
+
+      const fact = this.#turn.state.catalog
+        .flatMap((entry) => entry.facts)
+        .find((entry) => entry.id === `task:${removal.id}`);
+
+      if (fact === undefined) continue;
+      this.#turn.recordKnowledge({
+        type: 'lifecycle',
+        id: fact.id,
+        revision: fact.revision,
+        status: 'retracted',
+        support: span(removal.quote),
+      });
+    }
+  }
+
+  #saveSource(
+    id: string,
+    role: import('./context.ts').CatalogSource['role'],
+    content: JsonValue,
+    observation?: import('./context.ts').CatalogSource['observation'],
+  ): void {
+    const key = `${id}@${stableHash(content)}`;
+
+    if (this.#processedSources.has(key)) return;
+    this.#processedSources.add(key);
+
+    const existing = this.#turn.state.catalog.find(
+      (source) => source.id === id && source.version === stableHash(content),
+    );
+
+    if (existing?.complete === true) return;
+
+    if (this.#ingestedSources >= 128) {
+      if (existing === undefined) {
+        const placeholder = ingestSource(id, role, null, this.#turn.state.catalog.length);
+        placeholder.version = stableHash(content);
+        placeholder.content = structuredClone(content);
+        placeholder.facts = [];
+        placeholder.pending = [{ pointer: '', depth: 0 }];
+        placeholder.complete = false;
+        this.#turn.recordSource(placeholder);
+      }
+
+      return;
+    }
+
+    this.#ingestedSources++;
+    const source = ingestSource(id, role, content, existing?.order ?? this.#turn.state.catalog.length, existing);
+
+    if (observation !== undefined) source.observation = observation;
+    this.#turn.recordSource(source);
+  }
+
+  #syncSources(): void {
+    this.#saveSource('instructions', 'instructions', this.#definition.instructions);
+
+    for (const source of messageSources(this.#turn.conversation))
+      this.#saveSource(source.id, source.role, source.content, source.observation);
+  }
+
   #agentContext(action: Extract<NextAction, { type: 'tool' | 'tool_call' }> | undefined): AgentContext {
-    const conversation = [...this.#originalMessages];
+    this.#syncSources();
+    const conversation = [...this.#turn.conversation];
 
     const awaiting =
       action === undefined
@@ -1014,6 +1128,7 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
           };
 
     return {
+      store: this.#store,
       instructions: this.#definition.instructions,
       request: this.#request,
       conversation,
@@ -1099,11 +1214,13 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
 
   /** Generate one reply. Reject empty text and tool markup without another model call. */
   async #respond(outcome: StopReason): Promise<string> {
+    this.#syncSources();
     const responder = this.#definition.respond ?? defaultRespond;
 
     try {
       const result = await abortable(this.#abort.signal, () =>
         responder({
+          store: this.#store,
           request: this.#request,
           instructions: this.#definition.instructions,
           stopReason: outcome,
@@ -1121,10 +1238,6 @@ class ExecutionRun<TOOLS extends AgentToolSet> {
       return statusResponse(this.#callerSignal?.aborted === true ? 'cancelled' : outcome, this.#turn.state);
     }
   }
-}
-
-function isTextContent(content: ModelMessage['content']): content is string {
-  return typeof content === 'string';
 }
 
 // Special-token and tool-call syntax from model chat templates. A reply is text for the user;
@@ -1149,6 +1262,7 @@ function contractViolation(text: string): string | undefined {
 }
 
 export interface RespondContext {
+  store: ContextStore;
   request: string;
   instructions: string;
   stopReason: StopReason;
@@ -1162,7 +1276,8 @@ export type RespondAdapter = (context: RespondContext) => Promise<{ text: string
 
 const outcomeGuidance: Record<StopReason, string> = {
   completed: 'The work finished. Answer the request directly using the evidence.',
-  needs_input: 'Information is missing. State precisely what you need and why.',
+  needs_input:
+    'This turn stopped for input. Ask only for the specific missing user information or confirmation identified by the execution state. If an action was denied, explain the denial; confirmation alone does not resolve a policy denial.',
   blocked: 'The work is blocked. Say what blocked it and what would unblock it.',
   limit: 'The step budget ran out. Report what was done and what remains.',
   error: 'A runtime error stopped the work. Report what was done and what failed.',
@@ -1173,8 +1288,7 @@ const defaultRespond: RespondAdapter = async (context) => {
   const result = await context.generateText({
     purpose: 'response',
     system: [
-      context.instructions,
-      'You write the final message of an agent turn. You have no tools.',
+      'You write the final message of an agent turn. Execution has stopped. No tool will run after this reply. The reply cannot schedule work. Report background work only when a tool result shows it was already scheduled. Do not promise to perform an unexecuted action.',
       'Report only what the evidence supports. Never claim work that was not done.',
       outcomeGuidance[context.stopReason],
     ]
@@ -1183,11 +1297,7 @@ const defaultRespond: RespondAdapter = async (context) => {
     prompt: [
       `Original request:\n${context.request}`,
       `Outcome: ${context.stopReason}`,
-      `Conversation:\n${JSON.stringify(projectMessages(context.conversation))}`,
-      `Tool calls:\n${JSON.stringify(callHistory(context.conversation, context.state.observations).map((call) => ({ ...call, result: presentResult(call.result, call.ref) })))}`,
-      `Evidence:\n${digestObservations(context.state.observations)}`,
-      `Retained goals and constraints:\n${JSON.stringify(context.state.task)}`,
-      `Application inspections:\n${JSON.stringify(context.state.inspections)}`,
+      await decisionContext(context, 'Support the final response and disclose incomplete evidence.'),
       context.state.blockers.length === 0
         ? ''
         : `Blockers:\n${context.state.blockers.map((blocker) => `- ${blocker.reason}`).join('\n')}`,

@@ -1,0 +1,15 @@
+{
+  "status": "invalid_comparison",
+  "reason": "OpenRouter rejected requests because the configured credit allowance could not cover the requested token limits.",
+  "source": "/Users/caseycollins/projects/tau2-bench/data/simulations/20260921_175143_airline_keeled_keeled_user_simulator_gpt-4.1/results.json",
+  "scheduled_tasks": [10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+  "completed_scored_tasks": ["12", "13", "11", "14", "16"],
+  "infrastructure_error_tasks": ["17", "18", "19", "10", "15"],
+  "candidate_run_started": false,
+  "cost": null,
+  "limits": [
+    "Do not treat infrastructure errors as task failures or as zero-cost work.",
+    "The runner stored empty trajectories and zero durations for five infrastructure failures; interrupted work is not recoverable from this file.",
+    "No held-out comparison or improvement claim can be made from this attempt."
+  ]
+}

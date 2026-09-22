@@ -44,7 +44,11 @@ describe('joint controller', () => {
 
     expect(inputs).toEqual([{ query: 'release notes' }]);
     expect(result.stopReason).toBe('completed');
-    expect(traces).toEqual(['joint_decision', 'joint_decision', 'response']);
+    expect(traces.filter((purpose) => purpose !== 'context_query')).toEqual([
+      'joint_decision',
+      'joint_decision',
+      'response',
+    ]);
     expect(result.usage.model.calls).toBe(3);
   });
 
@@ -163,6 +167,11 @@ describe('complete call runtime path', () => {
       decisions: [
         { type: 'tool_call', tool: 'publish', input: { document: 'draft-1' } },
         { type: 'respond', outcome: 'needs_input' },
+        (context) => {
+          const held = context.awaitingConfirmation[0]!;
+
+          return { type: 'tool_call', tool: held.tool, input: held.input };
+        },
         { type: 'respond', outcome: 'completed' },
       ],
       authorize: (_action, context) => ({

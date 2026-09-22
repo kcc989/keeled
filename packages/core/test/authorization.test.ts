@@ -529,7 +529,7 @@ describe('what a refusal depends on', () => {
 });
 
 describe('an action held for confirmation', () => {
-  test('resumes its exact input on the next turn before asking the controller to select it again', async () => {
+  test('resumes the controller-selected exact input without regenerating arguments', async () => {
     const executed: unknown[] = [];
     const awaiting: unknown[] = [];
     let turn = 1;
@@ -558,6 +558,11 @@ describe('an action held for confirmation', () => {
         decisions: [
           { type: 'tool', tool: 'cancel' },
           { type: 'respond', outcome: 'needs_input' },
+          (context) => {
+            const held = context.awaitingConfirmation[0]!;
+
+            return { type: 'tool_call', tool: held.tool, input: held.input };
+          },
           { type: 'respond', outcome: 'completed' },
         ],
 
@@ -619,4 +624,155 @@ describe('the selected action reaches input resolution', () => {
       },
     ]);
   });
+});
+
+test('held actions do not run on unrelated turns, and selecting one preserves the others', async () => {
+  for (const name of ['archive_document', 'freeze_item']) {
+    const executed: string[] = [];
+    const authorized: string[] = [];
+
+    const history: AgentMessage[] = [
+      {
+        id: 'held',
+        role: 'assistant',
+        parts: ['old', 'current'].map((id, index) => ({
+          type: 'data-blocker' as const,
+          id: `block-${id}`,
+          data: {
+            id: `block-${id}`,
+            cycle: index + 1,
+            kind: 'needs_confirmation' as const,
+            tool: name,
+            input: { id },
+            reason: `Confirm ${id}.`,
+            resolution: 'Ask for confirmation.',
+          },
+        })),
+      },
+    ];
+
+    const controller = scriptedController({
+      decisions: [
+        { type: 'respond', outcome: 'needs_input' },
+        (context) => {
+          expect(context.awaitingConfirmation.map((action) => action.input)).toEqual([
+            { id: 'old' },
+            { id: 'current' },
+          ]);
+
+          return { type: 'tool_call', tool: name, input: context.awaitingConfirmation[1]!.input };
+        },
+        (context) => {
+          expect(context.awaitingConfirmation.map((action) => action.input)).toEqual([{ id: 'old' }]);
+
+          return { type: 'respond', outcome: 'completed' };
+        },
+        { type: 'tool_call', tool: name, input: { id: 'corrected' } },
+        { type: 'respond', outcome: 'completed' },
+      ],
+      authorize: (action) => {
+        authorized.push(JSON.stringify(action.input));
+
+        return { permitted: true, confirmed: true };
+      },
+    });
+
+    const agent = createAgent({
+      instructions: 'Change only the selected record.',
+      controller,
+      model: stubModel({ text: 'Reply.' }),
+      tools: {
+        [name]: agentTool({
+          description: 'Apply the fixed change.',
+          inputSchema: z.object({ id: z.string() }),
+          risk: 'write',
+          execute: (input) => {
+            executed.push(input.id);
+
+            return { changed: input.id };
+          },
+        }),
+      },
+    });
+
+    const unrelated = await agent.run({ messages: [...history, userMessage('First, explain the choices.')] });
+    expect(executed).toEqual([]);
+    expect(authorized).toEqual([]);
+
+    const selected = await agent.run({
+      messages: [...unrelated.messages, userMessage('Confirm only current.', 'user-2')],
+    });
+
+    expect(executed).toEqual(['current']);
+    await agent.run({ messages: [...selected.messages, userMessage('Use corrected instead of old.', 'user-3')] });
+    expect(executed).toEqual(['current', 'corrected']);
+    expect(authorized).toEqual(['{"id":"current"}', '{"id":"corrected"}']);
+  }
+});
+
+test('a selected held action still requires current confirmation', async () => {
+  const history: AgentMessage[] = [
+    {
+      id: 'held',
+      role: 'assistant',
+      parts: [
+        {
+          type: 'data-blocker',
+          id: 'b',
+          data: {
+            id: 'b',
+            cycle: 1,
+            kind: 'needs_confirmation',
+            tool: 'archive',
+            input: { id: 'A' },
+            reason: 'Confirm A.',
+            resolution: 'Ask.',
+          },
+        },
+        {
+          type: 'data-transition',
+          id: 'finished',
+          data: { id: 'finished', cycle: 1, kind: 'finish', stopReason: 'needs_input' },
+        },
+      ],
+    },
+  ];
+
+  let writes = 0;
+  let authorizations = 0;
+
+  const controller = scriptedController({
+    decisions: [
+      (context) => ({ type: 'tool_call', tool: 'archive', input: context.awaitingConfirmation[0]!.input }),
+      { type: 'respond', outcome: 'needs_input' },
+    ],
+    authorize: () => {
+      authorizations++;
+
+      return { permitted: true, confirmed: false };
+    },
+  });
+
+  const agent = createAgent({
+    instructions: 'Require confirmation.',
+    controller,
+    model: stubModel({ text: 'Confirm A?' }),
+    tools: {
+      archive: agentTool({
+        description: 'Archive a record.',
+        inputSchema: z.object({ id: z.string() }),
+        risk: 'write',
+        execute: () => {
+          writes++;
+
+          return { archived: true };
+        },
+      }),
+    },
+  });
+
+  const result = await agent.run({ messages: [...history, userMessage('What would happen?')] });
+  expect(writes).toBe(0);
+  expect(authorizations).toBe(1);
+  expect(result.state.blockers).toMatchObject([{ kind: 'needs_confirmation', input: { id: 'A' } }]);
 });

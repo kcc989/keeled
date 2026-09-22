@@ -1,14 +1,11 @@
 import { jsonSchema, type LanguageModel } from 'ai';
 import {
   MissingInformation,
+  resolveToolInput,
+  decisionContext,
   agentTool,
-  callHistory,
-  presentResult,
-  projectMessages,
   type AgentContext,
-  type AgentMessage,
   type AgentToolSet,
-  type Observation,
   type JsonValue,
   isJsonValue,
   jsonObject,
@@ -76,7 +73,7 @@ export function bridgeTools(
         resolveInput: async (context: AgentContext) => {
           const model = spec.risk === 'read' ? argumentsModel : (writeArgumentsModel ?? argumentsModel);
 
-          return resolveInput(spec, context, model);
+          return resolveToolInput(spec, context, model);
         },
       });
   }
@@ -164,133 +161,14 @@ function describeSchema(node: SchemaNode | undefined, defs: Record<string, Schem
   return node.type ?? 'unknown';
 }
 
-// Unlike the runtime's default resolver, this one reads the whole conversation, because
-// identifiers the user gave in earlier turns are needed in later ones.
-async function resolveInput(
-  spec: ToolSpec,
-  context: AgentContext,
-  model: LanguageModel | undefined,
-): Promise<JsonValue> {
-  const properties = isJsonValue(spec.parameters) ? jsonObject(jsonObject(spec.parameters)?.['properties']) : undefined;
-
-  if (properties === undefined || Object.keys(properties).length === 0) return {};
-
-  const action = context.action;
-
-  const earlier = callHistory(context.conversation, context.state.observations).filter(
-    (call) => call.tool === spec.name,
-  );
-
-  const { object } = await context.generateObject<Resolution>({
-    model,
-    schema: resolutionSchema(spec.parameters),
-    name: spec.name,
-    purpose: 'tool_input',
-    description: spec.description,
-    system:
-      'You produce the input for a single tool call, or report that you cannot. Use only values stated in the ' +
-      'conversation or returned by earlier tool calls; never invent values or substitute placeholders. ' +
-      'Do not repeat an input this tool was already called with unless its result may have changed since. ' +
-      'If the call cannot be made yet because information is missing, set status to "missing" and say what is ' +
-      'needed and where it could come from.',
-    prompt: [
-      `Agent instructions:\n${context.instructions}`,
-      `Conversation:\n${transcript(context)}`,
-      `Tool calls so far:\n${callLog(context.conversation, context.state.observations)}`,
-      `Blockers this turn:\n${blockers(context.state.blockers)}`,
-      `Tool:\n${spec.name} — ${spec.description}`,
-      earlier.length === 0
-        ? `Earlier calls of ${spec.name}: none.`
-        : `Earlier calls of ${spec.name}:\n` +
-          earlier
-            .map(
-              (call) =>
-                `- [${call.ref}] input ${JSON.stringify(call.input)} ${call.outcome === 'result' ? 'returned a result' : 'failed'}`,
-            )
-            .join('\n'),
-      ...(action?.awaitingInput === undefined
-        ? []
-        : [
-            `This action is awaiting the user's confirmation with input ${JSON.stringify(action.awaitingInput)}. ` +
-              'If the user confirmed it unchanged, return exactly this input.',
-          ]),
-      `Input JSON schema:\n${JSON.stringify(spec.parameters)}`,
-    ].join('\n\n'),
-  });
-
-  if (object.status === 'missing') throw new MissingInformation(object.missing?.trim() || 'unspecified information');
-
-  const arguments_ = object.arguments ?? {};
-
-  if (!isJsonValue(arguments_)) throw new MissingInformation('tool input was not JSON-serializable');
-
-  return arguments_;
-}
-
-interface Resolution {
-  status: 'ready' | 'missing';
-  arguments?: JsonValue;
-  missing?: string;
-}
-
-/**
- * The tool's input schema wrapped so the model can decline: `ready` with arguments, or
- * `missing` with what is needed. The tool's definitions move to the root, where its
- * references point.
- */
-function resolutionSchema(parameters: JsonSchema) {
-  const object = isJsonValue(parameters) ? jsonObject(parameters) : undefined;
-  const { $defs, ...input } = object ?? {};
-
-  // SAFETY: the adjacent validation or framework contract establishes the asserted type.
-  return jsonSchema<Resolution>({
-    type: 'object',
-    properties: {
-      status: { type: 'string', enum: ['ready', 'missing'] },
-      arguments: input,
-      missing: {
-        type: 'string',
-        description: 'When status is "missing": what is needed and where it could come from.',
-      },
-    },
-    required: ['status'],
-    $defs,
-  } as JsonSchema);
-}
-
-function transcript(context: AgentContext): string {
-  return context.messages
-    .map((message) => `${message.role}: ${isTextContent(message.content) ? message.content : ''}`)
-    .join('\n');
-}
-
-// Execution state resets at the end of each turn, but the tool parts persist in the
-// conversation, so the log spans every turn. Each entry carries its reference; a result too
-// large to show whole appears as a page of complete records with the rest retrievable.
-function callLog(conversation: readonly AgentMessage[], observations: readonly Observation[], limit = 30): string {
-  const calls = callHistory(conversation, observations).slice(-limit);
-
-  if (calls.length === 0) return 'None.';
-
-  return calls
-    .map((call) => {
-      const when = call.turn === 'current' ? 'this turn' : 'earlier turn';
-      const made = `${call.tool}(${JSON.stringify(call.input)})`;
-
-      return call.outcome === 'result'
-        ? `- [${call.ref}, ${when}] ${made} returned ${JSON.stringify(presentResult(call.result, call.ref))}`
-        : `- [${call.ref}, ${when}] ${made} failed: ${String(call.result)}`;
-    })
-    .join('\n');
-}
-
 function blockers(records: readonly { reason: string }[]): string {
   return records.length === 0 ? 'None.' : records.map((record) => `- ${record.reason}`).join('\n');
 }
 
 const guidance: Record<StopReason, string> = {
   completed: 'The work for this request is finished. Tell the user the outcome.',
-  needs_input: 'Information is missing. Ask the user precisely for what you need.',
+  needs_input:
+    'This turn stopped for input. Ask only for the specific missing user information or confirmation identified by the execution state. If an action was denied, explain the denial; confirmation alone does not resolve a policy denial.',
   blocked: 'The work cannot continue. Explain why to the user.',
   limit: 'The step budget ran out. Report what was done and what remains.',
   error: 'A runtime error stopped the work. Report what was done and what failed.',
@@ -310,20 +188,20 @@ export function respondWith(specs: readonly ToolSpec[], draftModel?: LanguageMod
       purpose: 'response',
       model: draftModel,
       system: [
-        context.instructions,
-        'You write the next message to the user. You cannot call tools in this message, but the agent ' +
-          'can call these tools on later turns:\n' +
+        'You write the final message of this agent turn. Execution has stopped. No tool will run after ' +
+          'this reply. The reply cannot schedule work. Report background work only when a tool result shows ' +
+          'it was already scheduled. Do not promise to perform an unexecuted action. ' +
+          'The agent has these tools, but availability does not mean an action was permitted or executed:\n' +
           catalog,
         'Report only what the tool results below support and never claim an action that was not ' +
           'taken. Never tell the user the agent lacks a tool listed above. When information is missing, ' +
           'ask only for what these tools need and cannot look up themselves.',
         guidance[context.stopReason],
-        `Tool calls so far:\n${callLog(context.conversation, context.state.observations)}`,
+        await decisionContext(context, 'Support the response using exact observed facts and operation outcomes.'),
         `Blockers this turn:\n${blockers(context.state.blockers)}`,
-        `Retained goals and constraints:\n${JSON.stringify(context.state.task)}`,
-        `Application-verified facts and effects (do not replace with mental arithmetic):\n${JSON.stringify(context.state.inspections)}`,
       ].join('\n\n'),
-      messages: projectMessages(context.conversation),
+
+      prompt: context.request,
       abortSignal: context.abortSignal,
     };
 
@@ -353,8 +231,4 @@ function inputs(spec: ToolSpec): string {
 
 function isSchemaNode(value: SchemaNode | boolean | undefined): value is SchemaNode {
   return typeof value === 'object' && value !== null;
-}
-
-function isTextContent(content: AgentContext['messages'][number]['content']): content is string {
-  return typeof content === 'string';
 }

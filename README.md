@@ -157,12 +157,28 @@ validates and authorizes that exact input again before it can run.
 
 ### Evidence
 
-Every tool result keeps its call id as a stable reference. Prompts show a result whole when
-it fits; a larger list appears as a page of complete records with the number omitted and
-how to retrieve the rest. Records are never reduced to field names. `evidenceTool()` reads
-a stored result by reference, a page at a time, and can sort the full list by a field path,
-summing across `[]` segments, so questions such as "cheapest" are answered over every
-candidate.
+Ordinary agents build a persisted fact catalog from instructions, messages, contracts,
+and full tool results. Structured records retain exact values and container links. Text
+passages retain source offsets. Managed callbacks can query retained facts:
+
+```ts
+const evidence = await context.store.query('Which observed records support this request?');
+```
+
+Queries return immutable facts, exact source excerpts, a revision, and explicit coverage.
+They do not call tools or grant permission. Normal `jev()` supplies bounded relevance and
+contradiction judgments. Custom controllers should implement `judgeFacts`; missing or failed
+judgments produce a diagnostic and a bounded full-source fallback for built-in consumers.
+Direct queries reject failures. There is no context opt-in or separate ranking adapter.
+
+Action, argument, authorization, completion, and response consumers use shared context
+assembly. Instructions, user statements, confirmation proposals, and execution state remain
+mandatory. Small selected source scopes expand in full for comparisons and text exceptions.
+A filtered or capped result cannot establish exhaustive coverage. Budget overflow is explicit.
+
+Persist returned messages to retain facts across turns. Hydration restores accepted catalog
+and lifecycle events without extraction calls. This uses the host's existing persistence;
+it does not add crash recovery. See [context architecture and limits](docs/queryable-context.md).
 
 Every finished turn produces a response, including blocked, failed, and incomplete turns.
 Cancellation stops work at once, records the cancellation, and keeps partial text.
@@ -284,11 +300,9 @@ Unavailable tools remain in `ControllerContext.toolCatalog`, with availability m
 After argument resolution fails, another attempt waits for different successful evidence.
 A tool may supply `resolutionKey(context)` to declare the relevant dependency revision.
 
-`evidenceCalculationTool()` performs exact decimal sums, differences, products, and
-comparisons using values referenced in successful stored tool results. Large values must
-be decimal strings. This prevents generated operand substitution; the application still
-owns unit compatibility and business formulas. Floating-point values already rounded
-before storage cannot be recovered.
+Local arithmetic and evidence tools have been removed. Use host-supplied calculation tools
+through normal execution. Catalog queries are an internal read capability, not model-facing
+tool calls.
 
 `policy.turnTimeoutMs` bounds the whole turn, including callbacks that ignore cancellation.
 Such callbacks may continue outside the loop; uncertain writes remain quarantined.

@@ -5,3 +5,7 @@ dist
 .env.*
 !.env.example
 reviews/
+
+# Local Python evaluation caches
+__pycache__/
+*.pyc

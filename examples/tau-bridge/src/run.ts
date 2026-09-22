@@ -4,7 +4,7 @@
  *   bun run tau3 <domain> [tau2 run options...]
  *
  * TAU2_DIR points at the τ³-bench checkout (default ~/projects/tau2-bench).
- * TAU2_USER_LLM sets the user simulator (default openrouter/openai/gpt-4.1).
+ * TAU2_USER_LLM sets the user simulator (default openrouter/google/gemini-2.5-flash).
  */
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -74,7 +74,7 @@ function defaults(given: string[]): string[] {
   return [
     ...set('--agent', 'keeled'),
     ...set('--agent-llm', 'keeled'),
-    ...set('--user-llm', process.env['TAU2_USER_LLM'] ?? 'openrouter/openai/gpt-4.1'),
+    ...set('--user-llm', process.env['TAU2_USER_LLM'] ?? 'openrouter/google/gemini-2.5-flash'),
     ...set('--num-trials', '1'),
   ];
 }
