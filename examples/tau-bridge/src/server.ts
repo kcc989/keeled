@@ -7,7 +7,8 @@
  *   POST   /sessions/:id/tool   { id, content, error? }  -> BridgeEvent
  *   DELETE /sessions/:id
  */
-import { jev } from '@keeled/jev';
+import { join } from 'node:path';
+import { jev, type ToolGuideEvent } from '@keeled/jev';
 import { jointController } from '@keeled/core';
 import { openRouterModels, providersFromEnvironment } from './models.ts';
 import { Session, SessionConflictError, type SessionOptions, type ToolResult } from './session.ts';
@@ -32,7 +33,19 @@ if (controllerName !== 'jev' && controllerName !== 'joint') {
   process.exit(1);
 }
 
-const jevController = jev();
+// Pinned so runs compare with recorded experiments; override with KEELED_JEV_MODEL.
+const jevModel = process.env['KEELED_JEV_MODEL'] ?? 'jev-1.13.0';
+
+const toolGuide = process.env['KEELED_TOOL_GUIDE'] === '1';
+
+if (toolGuide && controllerName !== 'jev') {
+  console.error('KEELED_TOOL_GUIDE applies only to the Jev controller.');
+  process.exit(1);
+}
+
+const guideDirectory = process.env['KEELED_TOOL_GUIDE_DIR'];
+
+const jevController = jev({ model: jevModel, toolGuide, onToolGuide: reportGuide });
 
 const controller =
   controllerName === 'joint'
@@ -77,6 +90,7 @@ const server = Bun.serve({
             writeArgumentsModel,
             jointInput: controllerName === 'joint',
             policy,
+            settings: { controller: controllerName, jevModel, toolGuide },
           }),
         );
 
@@ -120,5 +134,30 @@ const server = Bun.serve({
 });
 
 console.log(
-  `Keeled bridge on http://localhost:${server.port} (${controllerName} controller; OpenRouter model ${modelId} via ${providers.join(' → ')})`,
+  `Keeled bridge on http://localhost:${server.port} (${controllerName} controller, ${jevModel}${toolGuide ? ', tool guide' : ''}; OpenRouter model ${modelId} via ${providers.join(' → ')})`,
 );
+
+/** Logs each guide build and, when KEELED_TOOL_GUIDE_DIR is set, saves the guide for review. */
+function reportGuide(event: ToolGuideEvent): void {
+  if (event.type === 'failed') {
+    console.error(`Tool guide ${event.key} failed after ${event.ms} ms: ${event.error}`);
+
+    return;
+  }
+
+  const { guide } = event;
+  const rules = guide.tools.reduce((total, entry) => total + entry.rules.length, 0);
+
+  console.log(
+    `Tool guide ${guide.key}: ${guide.segments.length} segments, ${rules} tool rules, ` +
+      `${guide.usage.calls} Jev calls, ${guide.usage.inputTokens} input tokens, ${event.ms} ms`,
+  );
+
+  if (guideDirectory !== undefined) {
+    const path = join(guideDirectory, `${guide.key}.json`);
+
+    Bun.write(path, `${JSON.stringify(guide, null, 2)}\n`).catch((error) =>
+      console.error(`Could not save tool guide to ${path}: ${error instanceof Error ? error.message : String(error)}`),
+    );
+  }
+}

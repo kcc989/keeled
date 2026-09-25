@@ -28,7 +28,7 @@ if (!(await Bun.file(tau2).exists())) {
 
 const port = process.env['KEELED_BRIDGE_PORT'] ?? '8787';
 
-const { controller, tauArgs } = runnerOptions(rest);
+const { controller, toolGuide, tauArgs } = runnerOptions(rest);
 
 const bridgeUrl = `http://localhost:${port}`;
 
@@ -44,7 +44,12 @@ if (
 }
 
 const bridge = Bun.spawn(['bun', 'run', join(import.meta.dir, 'server.ts')], {
-  env: { ...process.env, KEELED_BRIDGE_PORT: port, KEELED_CONTROLLER: controller },
+  env: {
+    ...process.env,
+    KEELED_BRIDGE_PORT: port,
+    KEELED_CONTROLLER: controller,
+    KEELED_TOOL_GUIDE: toolGuide ? '1' : process.env['KEELED_TOOL_GUIDE'],
+  },
   stdout: 'inherit',
   stderr: 'inherit',
 });

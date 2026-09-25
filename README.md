@@ -155,6 +155,28 @@ and observed results. A resolver that cannot produce input throws `MissingInform
 An action held for confirmation persists in the conversation. On the next turn, the runtime
 validates and authorizes that exact input again before it can run.
 
+### Tool guide (opt-in)
+
+`jev({ toolGuide: true })` indexes the instructions against the tool catalog once per
+set of instructions, tools, and Jev model. Code splits the instructions into numbered
+segments. Headings and lead-in lines stay attached as scope. For each tool, Jev:
+
+1. judges whether any segment sets a rule for the tool (a Noul);
+2. ranks the segments (a Choice over segment numbers);
+3. confirms each candidate segment with its own Noul;
+4. picks which other tool usually supplies each required input (a Choice).
+
+Each tool option then quotes its segments and names the tools that supply its inputs, with
+whether each has returned a result in the conversation. The guide only adds text to tool
+options. It does not change authorization, input resolution, or any other check.
+A rule is always a quote of the instructions; Jev picks segment numbers and never
+writes rule text.
+
+The controller caches the guide in memory and shares it across conversations. A failed
+build leaves selection unchanged and is not retried. The turn that first reads a finished
+guide carries its usage. This is an unmeasured experiment; see the
+[experiment record](docs/experiments/tool-guide.md).
+
 ### Evidence
 
 Every tool result keeps its call id as a stable reference. Prompts show a result whole when

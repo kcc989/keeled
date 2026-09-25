@@ -8,6 +8,7 @@ import {
   type AgentMessage,
   type AgentPolicy,
   type AgentToolSet,
+  type Blocker,
   type Controller,
   type ControllerContext,
   type ControllerDecision,
@@ -28,7 +29,8 @@ export interface DecisionLog {
 }
 
 export interface TraceEntry {
-  kind: 'control' | 'authorize' | 'generate';
+  /** `session` records the run settings once; `blocker` records each declined attempt once. */
+  kind: 'control' | 'authorize' | 'generate' | 'session' | 'blocker';
   ms: number;
   detail?: unknown;
 }
@@ -69,6 +71,8 @@ export interface SessionOptions {
   /** Complete external tool inputs come from a joint controller decision. */
   jointInput?: boolean;
   policy?: AgentPolicy;
+  /** Run settings recorded in the first event's trace, so saved results state their configuration. */
+  settings?: { [key: string]: JsonValue };
 }
 
 export class SessionConflictError extends Error {}
@@ -87,16 +91,24 @@ export class Session {
   #pending: { id: string; resolve(value: JsonValue): void; reject(error: Error): void } | undefined;
   #waiter: { resolve(event: BridgeEvent): void; reject(error: Error): void } | undefined;
   #running = false;
+  readonly #blockers = new Set<string>();
 
   constructor(options: SessionOptions) {
     this.#messages = (options.history ?? []).map((entry) => textMessage(entry.role, entry.text));
     const trace = (entry: TraceEntry) => this.#trace.push(entry);
 
+    if (options.settings !== undefined) trace({ kind: 'session', ms: 0, detail: options.settings });
+
     this.#agent = createAgent({
       instructions: options.instructions,
       taskTracker:
         options.trackTasks === false ? undefined : modelTaskTracker({ extractionModel: options.argumentsModel }),
-      controller: observe(options.controller, trace, (decision) => this.#decisions.push(logOf(decision))),
+      controller: observe(
+        options.controller,
+        trace,
+        (decision) => this.#decisions.push(logOf(decision)),
+        (context) => this.#recordBlockers(context.blockers),
+      ),
       model: options.model,
       onGeneration: (entry) => trace({ kind: 'generate', ms: entry.ms, detail: entry }),
       tools: {
@@ -130,6 +142,7 @@ export class Session {
       (result) => {
         this.#messages = result.messages;
         this.#running = false;
+        this.#recordBlockers(blockersIn(result.messages));
         this.#emit({
           type: 'message',
           text: result.text.trim() || `The turn ended with status ${result.stopReason}; no response text was produced.`,
@@ -168,6 +181,19 @@ export class Session {
     this.#abort.abort();
   }
 
+  /** Adds each blocker to the trace the first time it is seen. */
+  #recordBlockers(blockers: readonly Blocker[]): void {
+    for (const blocker of blockers) {
+      if (this.#blockers.has(blocker.id)) continue;
+      this.#blockers.add(blocker.id);
+      this.#trace.push({
+        kind: 'blocker',
+        ms: 0,
+        detail: { kind: blocker.kind, tool: blocker.tool ?? null, reason: blocker.reason },
+      });
+    }
+  }
+
   #requestTool(call: ToolCallRequest, signal: AbortSignal): Promise<JsonValue> {
     return new Promise((resolve, reject) => {
       signal.addEventListener('abort', () => reject(new Error('Tool request aborted.', { cause: signal.reason })), {
@@ -200,11 +226,13 @@ function observe(
   controller: Controller,
   trace: (entry: TraceEntry) => void,
   onDecision: (decision: ControllerDecision) => void,
+  onContext: (context: ControllerContext) => void,
 ): Controller {
   const observed: Controller = {
     name: controller.name,
     inputMode: controller.inputMode,
     async control(context) {
+      onContext(context);
       const started = performance.now();
 
       try {
@@ -257,6 +285,12 @@ function logOf(decision: ControllerDecision): DecisionLog {
     confidence: decision.confidence,
     probabilities: decision.probabilities,
   };
+}
+
+function blockersIn(messages: readonly AgentMessage[]): Blocker[] {
+  return messages.flatMap((message) =>
+    message.parts.flatMap((part) => (part.type === 'data-blocker' ? [part.data] : [])),
+  );
 }
 
 function textMessage(role: 'user' | 'assistant', text: string): AgentMessage {

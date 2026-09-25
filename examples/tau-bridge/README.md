@@ -58,8 +58,8 @@ turns. The bridge also supplies the benchmark tool catalog and risk-specific arg
 | `POST`   | `/sessions/:id/tool` | `{ id, content, error? }`           | event   |
 | `DELETE` | `/sessions/:id`      |                                     | `204`   |
 
-An event is `{ type: 'tool_call', id, name, arguments, decisions }` or
-`{ type: 'message', text, stopReason, usage, decisions }`.
+An event is `{ type: 'tool_call', id, name, arguments, decisions, trace }` or
+`{ type: 'message', text, stopReason, usage, decisions, trace }`.
 
 ## Running a domain
 
@@ -76,6 +76,12 @@ Select the opt-in joint tool-and-input controller without changing the default J
 bun run tau3:first airline 10 --keeled-controller joint
 ```
 
+Enable the opt-in Jev tool guide (see the [record](../../docs/experiments/tool-guide.md)):
+
+```bash
+bun run tau3:first airline 10 --keeled-tool-guide
+```
+
 `tau3` starts the bridge, runs `tau2 run --domain <domain> --agent keeled` in the τ³-bench
 checkout, and stops the bridge. Any other `tau2 run` option passes through. The domain is passed through without special handling. The default is **one trial per task**;
 keep screening runs at one trial until a promising change warrants a larger evaluation.
@@ -88,15 +94,18 @@ at a time:
 bun run tau3:first airline 10 --max-concurrency 1
 ```
 
-| Variable               | Where           | Purpose                                                               |
-| ---------------------- | --------------- | --------------------------------------------------------------------- |
-| `TYPESAFE_API_KEY`     | Keeled `.env`   | Jev controller                                                        |
-| `OPENROUTER_API_KEY`   | Keeled `.env`   | Keeled's model calls                                                  |
-| `KEELED_MODEL`         | Keeled `.env`   | OpenRouter model id, e.g. `anthropic/claude-sonnet-4.5`               |
-| `OPENROUTER_PROVIDERS` | optional        | Provider order, default `together,modal`; no fallback beyond the list |
-| `OPENROUTER_API_KEY`   | τ³-bench `.env` | User simulator                                                        |
-| `TAU2_USER_LLM`        | optional        | User simulator model, default `openrouter/openai/gpt-4.1`             |
-| `TAU2_DIR`             | optional        | τ³-bench checkout, default `~/projects/tau2-bench`                    |
+| Variable                | Where           | Purpose                                                               |
+| ----------------------- | --------------- | --------------------------------------------------------------------- |
+| `TYPESAFE_API_KEY`      | Keeled `.env`   | Jev controller                                                        |
+| `OPENROUTER_API_KEY`    | Keeled `.env`   | Keeled's model calls                                                  |
+| `KEELED_MODEL`          | Keeled `.env`   | OpenRouter model id, e.g. `anthropic/claude-sonnet-4.5`               |
+| `OPENROUTER_PROVIDERS`  | optional        | Provider order, default `together,modal`; no fallback beyond the list |
+| `OPENROUTER_API_KEY`    | τ³-bench `.env` | User simulator                                                        |
+| `TAU2_USER_LLM`         | optional        | User simulator model, default `openrouter/openai/gpt-4.1`             |
+| `TAU2_DIR`              | optional        | τ³-bench checkout, default `~/projects/tau2-bench`                    |
+| `KEELED_JEV_MODEL`      | optional        | Jev model, default `jev-1.13.0`                                       |
+| `KEELED_TOOL_GUIDE`     | optional        | `1` enables the tool guide; `--keeled-tool-guide` sets it             |
+| `KEELED_TOOL_GUIDE_DIR` | optional        | Directory where each built guide is saved as `<key>.json`             |
 
 The two key sets stay separate. τ³-bench never overrides variables already in its
 environment, so the runner withholds Keeled's credentials from it and it reads only its
@@ -104,6 +113,27 @@ own `.env`.
 
 Results land in the checkout's `data/simulations/`; view them with
 `.venv/bin/tau2 view` from the checkout. `--agent-llm` is ignored by this agent.
+
+## Metrics
+
+```sh
+bun run tau3:metrics <results.json> [more results...]
+```
+
+This prints tool-selection metrics per simulation and in total, from the saved results only:
+
+| Metric                | Source                                                                   |
+| --------------------- | ------------------------------------------------------------------------ |
+| `toolErrors`          | Agent calls whose result was an error                                    |
+| `unreferencedCalls`   | Agent calls to a tool no reference action uses; a proxy for a wrong tool |
+| `missedReads/Writes`  | Evaluator action checks that did not match, by tool type                 |
+| `neverCalled`         | Reference tools never called, with how many decisions offered each       |
+| `offeredButNotChosen` | Total of those offers                                                    |
+| `blockers`            | Declined attempts by kind, from the trace                                |
+
+The first event of each session records its settings (`controller`, `jevModel`, `toolGuide`)
+in a `session` trace entry, and each blocker is recorded once in a `blocker` trace entry.
+Runs saved before this change have neither.
 
 OpenRouter routing is pinned with `provider: { order, allow_fallbacks: false, require_parameters: true }`,
 so requests go only to the listed providers, in order, and never to one that would drop

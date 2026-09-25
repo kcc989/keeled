@@ -71,6 +71,44 @@ describe('tau bridge session', () => {
     expect(outputs).toMatchObject([{ state: 'output-available', output: { task_id: 'task_9' } }]);
   });
 
+  test('records the run settings once and each blocker once in the trace', async () => {
+    const controller = scriptedController({
+      decisions: [
+        { type: 'tool', tool: 'not_registered' },
+        { type: 'tool', tool: 'not_registered' },
+        { type: 'respond', outcome: 'blocked' },
+      ],
+    });
+
+    const model = stubModel({ text: 'Blocked.' });
+
+    const s = new Session({
+      trackTasks: false,
+      instructions: policy,
+      tools,
+      controller,
+      model,
+      settings: { controller: 'scripted', toolGuide: false },
+    });
+
+    const reply = await s.sendUser('Do something.');
+
+    expect(reply.trace.filter((entry) => entry.kind === 'session')).toEqual([
+      { kind: 'session', ms: 0, detail: { controller: 'scripted', toolGuide: false } },
+    ]);
+
+    const blockers = reply.trace.filter((entry) => entry.kind === 'blocker');
+    expect(blockers.length).toBeGreaterThan(0);
+    expect(blockers[0]).toMatchObject({ detail: { kind: 'unavailable', tool: 'not_registered' } });
+
+    // Each stored blocker appears exactly once, although later decisions see it again.
+    const stored = s.messages.flatMap((message) => message.parts).filter((part) => part.type === 'data-blocker');
+    expect(blockers).toHaveLength(stored.length);
+
+    const next = await s.sendUser('Try again.');
+    expect(next.trace.some((entry) => entry.kind === 'session')).toBe(false);
+  });
+
   test('a failed remote tool becomes a tool error observation', async () => {
     const { session: s } = session([
       { type: 'tool', tool: 'get_users' },

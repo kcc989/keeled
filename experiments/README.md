@@ -10,6 +10,7 @@ adoption decision. Keep failed runs and measurement limits visible.
 | Bounded discovery continuation      | Rejected for merge; code removed           | 9/10 airline cases; 18 prepared reads; two wrong-tool reads; two missed writes                    | [Results and limitations](../docs/experiments/discovery-continuation.md)                                       |
 | 3: One reasoning call at a stall    | Rejected configuration; documentation only | 8/10 airline cases versus a saved 9/10 baseline; 24 recovery calls; three missed reference writes | [Design](recovery/README.md), [results and limitations](recovery/RESULTS.md), [metrics](recovery/summary.json) |
 | Joint tool and argument generation  | Keep opt-in; do not adopt as default       | 9/10 airline cases; one timeout; one duplicate write attempt; 36 rejected outputs                 | [Results and limitations](../docs/experiments/joint-tool-argument-generation.md)                               |
+| Tool guide                          | Opt-in; not measured                       | No benchmark run yet; a synthetic live screen missed one rule                                     | [Design and checks](../docs/experiments/tool-guide.md)                                                         |
 
 Experiment numbers follow the original proposal. This index does not imply that
 Experiments 1 and 2 were run or combined in this checkout.

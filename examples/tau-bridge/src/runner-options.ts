@@ -1,5 +1,7 @@
 export interface RunnerOptions {
   controller: 'jev' | 'joint';
+  /** Opt in to the Jev tool guide. */
+  toolGuide: boolean;
   tauArgs: string[];
 }
 
@@ -8,9 +10,15 @@ export function runnerOptions(args: readonly string[]): RunnerOptions {
   const tauArgs: string[] = [];
   let controller: RunnerOptions['controller'] = 'jev';
   let seen = false;
+  let toolGuide = false;
 
   for (let index = 0; index < args.length; index += 1) {
     const value = args[index]!;
+
+    if (value === '--keeled-tool-guide') {
+      toolGuide = true;
+      continue;
+    }
 
     if (value !== '--keeled-controller') {
       tauArgs.push(value);
@@ -28,5 +36,7 @@ export function runnerOptions(args: readonly string[]): RunnerOptions {
     controller = selected;
   }
 
-  return { controller, tauArgs };
+  if (toolGuide && controller !== 'jev') throw new Error('--keeled-tool-guide applies only to the Jev controller.');
+
+  return { controller, toolGuide, tauArgs };
 }
