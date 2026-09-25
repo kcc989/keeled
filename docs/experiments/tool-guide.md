@@ -87,6 +87,9 @@ changed to check every pair within a budget. With that change:
 | Rules for the cancellation tool  |                5 |         14 |
 | Rules for the flight-change tool |                6 |         15 |
 
+The shortlist build did not include the tools' result schemas; the every-pair build did. The
+rule counts depend mostly on the check itself, but the two columns differ in both respects.
+
 - The cancellation tool now carries the four conditions listed under its lead-in line, not
   only the lead-in line.
 - One general segment ("only make one tool call at a time") was a rule for all 16 tools. The
