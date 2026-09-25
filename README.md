@@ -159,17 +159,18 @@ validates and authorizes that exact input again before it can run.
 
 `jev({ toolGuide: true })` indexes the instructions against the tool catalog once per
 set of instructions, tools, and Jev model. Code splits the instructions into numbered
-segments. Headings and lead-in lines stay attached as scope. For each tool, Jev:
+segments. Headings and lead-in lines stay attached as scope. Then Jev:
 
-1. judges whether any segment sets a rule for the tool (a Noul);
-2. ranks the segments (a Choice over segment numbers);
-3. confirms each candidate segment with its own Noul;
-4. picks which other tool usually supplies each required input (a Choice).
+1. checks each segment against each tool with its own Noul: does it set a rule for when
+   to call the tool, what must come first, or whether it may run? Above 4,000 tool and
+   segment pairs, a Choice first shortlists eight segments per tool;
+2. picks which other tool usually supplies each required input (a Choice).
 
 Each tool option then quotes its segments and names the tools that supply its inputs, with
-whether each has returned a result in the conversation. The guide only adds text to tool
-options. It does not change authorization, input resolution, or any other check.
-A rule is always a quote of the instructions; Jev picks segment numbers and never
+whether each has returned a result in the conversation. A rule that more than three quarters
+of the tools share is left out of the options, because it cannot separate them. The guide only
+adds text to tool options. It does not change authorization, input resolution, or any other
+check. A rule is always a quote of the instructions; Jev picks segment numbers and never
 writes rule text.
 
 The controller caches the guide in memory and shares it across conversations. A failed

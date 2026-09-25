@@ -20,7 +20,7 @@ The records do not label failures by cause, so the share that this mechanism can
 
 ## Mechanism
 
-The guide follows the TypeSafe cookbook patterns
+The guide started from the TypeSafe cookbook patterns
 [semantic find](https://docs.typesafe.ai/cookbooks/semantic_find) and
 [entity alignment](https://docs.typesafe.ai/cookbooks/entity_alignment).
 It is in `packages/jev/src/guide.ts`.
@@ -28,18 +28,18 @@ It is in `packages/jev/src/guide.ts`.
 1. Code splits the instructions into numbered segments (`I000|`). Markdown headings, lead-in
    lines that end with a colon, and parent list items become the scope of each segment. A line
    longer than 360 characters is split at sentence ends.
-2. The first pass asks, for each tool of the full catalog:
-   - one Noul: does any segment set a rule for when to call it, what must come before it, or
-     whether it may run?
-   - one Choice over segment numbers (at most 250 options per Choice; longer instructions use
-     several windows);
-   - one Choice for each required input, over the other tools and a user option.
-3. For each tool with a Noul of at least 0.35, the second pass confirms the eight
-   highest-ranked candidates, each with its own Noul. A segment with 0.5 or more becomes a
-   rule. The Noul gate is necessary, because a Choice always ranks some segment first.
+2. The first pass asks, for each tool of the full catalog, one Noul (does any segment set a
+   rule for when to call it, what must come before it, or whether it may run?) and one Choice
+   for each required input, over the other tools and a user option.
+3. The second pass checks every segment against every tool, each pair with its own Noul, while
+   the catalog and instructions give at most 4,000 pairs. A segment with 0.5 or more becomes a
+   rule. Above that budget, a Choice over segment numbers (at most 250 options per Choice)
+   shortlists eight candidates per tool, and only tools whose first-pass Noul is at least 0.35
+   are checked.
 4. Each tool option quotes its rules in document order and names each input source at 0.5 or
    more. For each source, it says whether that tool returned a result, only failed, or has not
-   been called in the conversation.
+   been called in the conversation. A rule shared by more than three quarters of the catalog
+   is left out of the options, because it cannot separate them; it stays in the saved guide.
 
 Jev picks segment numbers and never writes rule text. The guide adds only option text. Authorization,
 input resolution, validation, confirmation, and repetition checks are unchanged. The guide
@@ -54,9 +54,9 @@ carries its Jev usage.
 
 ## Verification so far
 
-- `bun run check` passes: lint, format, TypeScript, and 135 tests (111 before this change).
-- A live screen used a synthetic library setting with `jev-1.13.0`. The build used 2 Jev
-  calls, about 5,100 input tokens, and under one second.
+- `bun run check` passes: lint, format, TypeScript, and 137 tests (111 before this change).
+- A live screen used a synthetic library setting with `jev-1.13.0` and the first design
+  (Choice shortlist). The build used 2 Jev calls, about 5,100 input tokens, and under one second.
   - Rules and input sources were correct for all five tools.
   - It missed one rule: "Never share one member's loans with another member" was not attached
     to the loan listing tool.
@@ -65,8 +65,39 @@ carries its Jev usage.
 - A live `control()` call with the guide on selected the member lookup first, as the
   instructions require. This checks that the API accepts the request. It is not evidence of
   better selection.
+- One Jev request answered 128 Nouls. The default batch is now 64 questions.
 
-These checks show that the mechanism works. They do not show that it improves task success.
+### Review of a guide built from the public airline policy
+
+Before any benchmark run, a guide was built through the bridge session path from the public
+τ²-bench airline policy (111 segments) and its 14 tool contracts with result schemas, plus the
+bridge's two local tools. No task, trajectory, or evaluator data was used.
+
+The first design found too few rules. Jev's Choice put all its probability on one or two
+segments: for the booking tool, two of 111 segments had any probability, so the shortlist
+confirmed only two rules. The same would happen with any long instructions. The design was
+changed to check every pair within a budget. With that change:
+
+| Measure                          | Choice shortlist | Every pair |
+| -------------------------------- | ---------------: | ---------: |
+| Jev calls                        |                9 |         29 |
+| Jev input tokens                 |           81,916 |    410,424 |
+| Build time                       |            1.1 s |      3.5 s |
+| Rules for the booking tool       |                2 |         32 |
+| Rules for the cancellation tool  |                5 |         14 |
+| Rules for the flight-change tool |                6 |         15 |
+
+- The cancellation tool now carries the four conditions listed under its lead-in line, not
+  only the lead-in line.
+- One general segment ("only make one tool call at a time") was a rule for all 16 tools. The
+  shared-rule filter now leaves it out of every option.
+- The longest option note is about 4,000 characters (booking). Six tools get no note.
+- Input sources are partly right. Tools are named as sources for booking flights, booking
+  payment methods, baggage counts, and flight status inputs. Reservation and payment
+  identifiers are judged to come from the user, although a profile lookup also returns them.
+
+This review changed only general mechanisms, each tested with synthetic fixtures. It is not
+evidence of better task success.
 
 ## How to measure it
 
@@ -92,10 +123,14 @@ Before adoption, the guide must:
 
 ## Limits
 
-- The recall of rules is not measured. The live screen missed one permission rule.
+- The recall and precision of rules are not measured against labels. The first design missed
+  rules; the airline review above is a visual check only.
+- Checking every pair costs tools × segments Nouls. Above the budget, the shortlist returns
+  and recall drops.
 - Input sources are judged from tool descriptions. Tools without result descriptions give
   weaker sources.
 - The guide describes rules; it does not check whether a rule is met.
 - The build cost is charged to the turn that first reads the guide, so one task's controller
   tokens include it.
-- The cookbook thresholds come from `jev-1.12`. These floors are not tuned on labeled Keeled data.
+- The floors (0.5 for rules and sources, 0.75 for shared rules) are not tuned on labeled data.
+- Long notes may dilute the option text Jev compares. This is not measured.

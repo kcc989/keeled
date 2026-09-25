@@ -28,6 +28,8 @@ interface Truth {
   decoys?: { [tool: string]: string[] };
   /** For each tool input, the tool that supplies it, or `userSource`. */
   sources: { [tool: string]: { [parameter: string]: string } };
+  /** A Choice puts all its mass on one segment, as Jev does over long instructions. */
+  sharp?: boolean;
 }
 
 interface Setting {
@@ -90,11 +92,13 @@ function oracle(truth: Truth) {
         const favored = ids.filter((id) => matches(id, truth.rules[tool]) || matches(id, truth.decoys?.[tool]));
 
         // Like the real model, a Choice always ranks some segment first.
-        const top = favored.length > 0 ? favored : [ids[0]!];
+        const top = favored.length > 0 ? (truth.sharp === true ? favored.slice(0, 1) : favored) : [ids[0]!];
 
-        const probabilities = Object.fromEntries(
-          ids.map((id) => [id, top.includes(id) ? 0.9 / top.length : 0.1 / (ids.length - top.length || 1)]),
-        );
+        // A sharp Choice gives every other segment exactly zero, as observed from Jev.
+        const rest = truth.sharp === true ? 0 : 0.1 / (ids.length - top.length || 1);
+        const mass = truth.sharp === true ? 1 : 0.9;
+
+        const probabilities = Object.fromEntries(ids.map((id) => [id, top.includes(id) ? mass / top.length : rest]));
 
         answers[name] = { type: 'choice', choice: top[0]!, confidence: 0.9, probabilities };
       } else if (name.startsWith('s')) {
@@ -311,11 +315,40 @@ describe('building the guide', () => {
 
   test('a tool no segment governs gets no rule, although a Choice ranks some segment first', async () => {
     const { ask, sent } = oracle({ rules: {}, sources: {} });
-    const guide = await buildGuide(ask, 'k', library.instructions, library.tools, options);
+    const shortlist = await buildGuide(ask, 'k', library.instructions, library.tools, { ...options, pairBudget: 0 });
 
-    expect(guide.tools.every((entry) => entry.rules.length === 0)).toBe(true);
-    // Nothing reached the confirmation pass.
+    expect(shortlist.tools.every((entry) => entry.rules.length === 0)).toBe(true);
+    // In shortlist mode the Noul gate stops the confirmation pass.
     expect(sent.flatMap((request) => Object.keys(request.questions)).some((name) => name.startsWith('r'))).toBe(false);
+
+    const every = await buildGuide(
+      oracle({ rules: {}, sources: {} }).ask,
+      'k',
+      library.instructions,
+      library.tools,
+      options,
+    );
+
+    expect(every.tools.every((entry) => entry.rules.length === 0)).toBe(true);
+  });
+
+  test('every pair within the budget is checked, so a sharp Choice does not limit recall', async () => {
+    const instructions = Array.from({ length: 12 }, (_, n) => `- Export rule ${n}: check condition ${n}.`)
+      .concat(['- Import files only from the shared folder.'])
+      .join('\n');
+
+    const tools: CatalogTool[] = [
+      { name: 'export', description: 'Export a report.', risk: 'write', required: [] },
+      { name: 'import', description: 'Import a file.', risk: 'write', required: [] },
+    ];
+
+    const truth: Truth = { rules: { export: ['Export rule'], import: ['Import files'] }, sources: {}, sharp: true };
+    const every = await buildGuide(oracle(truth).ask, 'k', instructions, tools, options);
+    const shortlist = await buildGuide(oracle(truth).ask, 'k', instructions, tools, { ...options, pairBudget: 0 });
+
+    expect(every.tools[0]!.rules).toHaveLength(12);
+    expect(every.tools[1]!.rules.map((rule) => rule.segment)).toEqual(['I012']);
+    expect(shortlist.tools[0]!.rules).toHaveLength(1);
   });
 
   test('a highly ranked segment that does not set a rule is dropped on confirmation', async () => {
@@ -324,7 +357,11 @@ describe('building the guide', () => {
       decoys: { list_loans: ['The branch opens at nine'] },
     };
 
-    const guide = await buildGuide(oracle(truth).ask, 'k', library.instructions, library.tools, options);
+    const guide = await buildGuide(oracle(truth).ask, 'k', library.instructions, library.tools, {
+      ...options,
+      pairBudget: 0,
+    });
+
     const entry = guide.tools.find((candidate) => candidate.tool === 'list_loans')!;
 
     expect(entry.rules.map((rule) => rule.segment)).toEqual(['I000']);
@@ -349,7 +386,12 @@ describe('building the guide', () => {
 
     const { ask, sent } = oracle({ rules: { archive: ['Rule number 255 '] }, sources: {} });
 
-    const guide = await buildGuide(ask, 'k', instructions, tools, { ...options, questionsPerRequest: 3 });
+    const guide = await buildGuide(ask, 'k', instructions, tools, {
+      ...options,
+      questionsPerRequest: 3,
+      pairBudget: 0,
+    });
+
     const questions = sent.flatMap((request) => Object.entries(request.questions));
 
     for (const request of sent) expect(Object.keys(request.questions).length).toBeLessThanOrEqual(3);
@@ -403,6 +445,36 @@ describe('the guide in a tool option', () => {
         ' | [I003] Loans › Before renewing, the member must say which loan: › Read the loan title back to them.' +
         ' Inputs: "loan_id" usually comes from list_loans (not called yet in this conversation).',
     );
+  });
+
+  test('a rule shared by nearly every tool stays in the guide but not in tool options', async () => {
+    const instructions = ['- Make one call at a time.', '- Close a ticket only after the fix is verified.'].join('\n');
+
+    const tools: CatalogTool[] = [
+      { name: 'open_ticket', description: 'Open a ticket.', risk: 'write', required: [] },
+      { name: 'close_ticket', description: 'Close a ticket.', risk: 'write', required: [] },
+      { name: 'read_ticket', description: 'Read a ticket.', risk: 'read', required: [] },
+      { name: 'assign', description: 'Assign a ticket.', risk: 'write', required: [] },
+    ];
+
+    const truth: Truth = {
+      rules: {
+        open_ticket: ['one call at a time'],
+        close_ticket: ['one call at a time', 'Close a ticket only'],
+        read_ticket: ['one call at a time'],
+        assign: ['one call at a time'],
+      },
+      sources: {},
+    };
+
+    const guide = await buildGuide(oracle(truth).ask, 'k', instructions, tools, options);
+
+    expect(guide.tools.every((entry) => entry.rules.some((rule) => rule.segment === 'I000'))).toBe(true);
+    expect(guideNote('close_ticket', guide, [], options)).toBe(
+      ' Instructions for this tool: [I001] Close a ticket only after the fix is verified.',
+    );
+    expect(guideNote('open_ticket', guide, [], options)).toBe('');
+    expect(guideNote('open_ticket', guide, [], { ...options, sharedRuleShare: 1 })).toContain('[I000]');
   });
 
   test('a source below the floor is not reported', async () => {

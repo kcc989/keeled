@@ -45,20 +45,30 @@ export interface ToolGuide {
 }
 
 export interface ToolGuideOptions {
-  /** Below this probability no segment is taken to govern a tool. Default 0.35. */
+  /** In shortlist mode, below this probability no segment is taken to govern a tool. Default 0.35. */
   governedFloor?: number;
   /** At or above this probability a segment counts as a rule for a tool. Default 0.5. */
   ruleFloor?: number;
   /** At or above this probability a tool counts as the source of an input. Default 0.5. */
   sourceFloor?: number;
-  /** Candidate segments checked per tool. Default 8. */
+  /** In shortlist mode, candidate segments checked per tool. Default 8. */
   maxCandidates?: number;
-  /** Questions in one Jev request. Default 16. */
+  /**
+   * Largest number of tool and segment pairs that are each checked with their own Noul.
+   * Above it, a Choice shortlists candidates first. Default 4000.
+   */
+  pairBudget?: number;
+  /** Questions in one Jev request. Default 64. */
   questionsPerRequest?: number;
   /** Jev requests in flight while building. Default 4. */
   concurrency?: number;
   /** Longest segment, in characters, before a line is split at sentence ends. Default 360. */
   segmentChars?: number;
+  /**
+   * A rule for more than this share of the catalog is left out of tool options, because a rule
+   * every option carries cannot separate them. It stays in the guide. Default 0.75.
+   */
+  sharedRuleShare?: number;
 }
 
 export type ResolvedGuideOptions = Required<ToolGuideOptions>;
@@ -69,9 +79,11 @@ export function guideOptions(options: ToolGuideOptions = {}): ResolvedGuideOptio
     ruleFloor: options.ruleFloor ?? 0.5,
     sourceFloor: options.sourceFloor ?? 0.5,
     maxCandidates: options.maxCandidates ?? 8,
-    questionsPerRequest: options.questionsPerRequest ?? 16,
+    pairBudget: options.pairBudget ?? 4000,
+    questionsPerRequest: options.questionsPerRequest ?? 64,
     concurrency: options.concurrency ?? 4,
     segmentChars: options.segmentChars ?? 360,
+    sharedRuleShare: options.sharedRuleShare ?? 0.75,
   };
 }
 
@@ -81,7 +93,7 @@ export const userSource = 'from:user';
 /** A Choice question accepts at most 255 options. */
 const choiceLimit = 250;
 
-const guideVersion = 1;
+const guideVersion = 2;
 
 type Answer = ChoiceResponse | NoulResponse;
 
@@ -216,9 +228,13 @@ export function quoteSegment(segment: InstructionSegment): string {
 
 /**
  * Builds the guide in two passes. The first asks, for each tool, whether any segment governs
- * it (a Noul, independent of the other options), which segments rank highest (a Choice over
- * segment numbers), and which tool supplies each required input. The Choice always ranks
- * some segment first, so the second pass confirms each candidate with its own Noul.
+ * it (a Noul), and which tool supplies each required input (a Choice). The second pass checks
+ * segments with one Noul each, because a Noul does not depend on the other options.
+ *
+ * When the catalog and instructions give at most `pairBudget` pairs, every segment is checked
+ * for every tool. Jev's Choice concentrates on one answer, so a Choice shortlist finds only the
+ * one or two most direct rules of a tool; the shortlist is the fallback for larger inputs, and
+ * there the first-pass Noul gates which tools are checked at all.
  */
 export async function buildGuide(
   ask: GuideAsk,
@@ -243,6 +259,7 @@ export async function buildGuide(
     windows.push(segments.slice(start, start + choiceLimit));
   }
 
+  const exhaustive = catalog.length * segments.length <= options.pairBudget;
   const first: Questions = {};
 
   for (const [index, tool] of catalog.entries()) {
@@ -256,7 +273,7 @@ export async function buildGuide(
       );
 
       for (const [position, window] of windows.entries()) {
-        if (window.length < 2) continue;
+        if (exhaustive || window.length < 2) continue;
         first[`w${index}_${position}`] = choice(
           `Which numbered instruction segment most directly sets a rule for the tool "${tool.name}": when to call it, what must come before it, or whether it may run?`,
           Object.fromEntries(window.map((segment) => [segment.id, null])),
@@ -298,9 +315,13 @@ export async function buildGuide(
 
     entries.push({ tool: tool.name, governed, rules: [], sources });
 
-    if (segments.length === 0 || governed < options.governedFloor) continue;
+    if (segments.length === 0 || (!exhaustive && governed < options.governedFloor)) continue;
 
-    for (const segment of candidates(answers, index, windows, options.maxCandidates)) {
+    const checked = exhaustive
+      ? segments.map((segment) => segment.id)
+      : candidates(answers, index, windows, options.maxCandidates);
+
+    for (const segment of checked) {
       const found = byId.get(segment);
 
       if (found === undefined) continue;
@@ -419,7 +440,8 @@ export function guideNote(
   if (entry === undefined) return '';
   const byId = new Map(guide.segments.map((segment) => [segment.id, segment]));
   const parts: string[] = [];
-  const included = entry.rules.flatMap((rule) => byId.get(rule.segment) ?? []);
+  const shared = sharedRules(guide, options.sharedRuleShare);
+  const included = entry.rules.flatMap((rule) => (shared.has(rule.segment) ? [] : (byId.get(rule.segment) ?? [])));
   // A lead-in line already quoted as the scope of another rule is not repeated.
   const scopes = new Set(included.flatMap((segment) => segment.context));
 
@@ -438,6 +460,19 @@ export function guideNote(
   if (inputs.length > 0) parts.push(`Inputs: ${inputs.join('; ')}.`);
 
   return parts.length === 0 ? '' : ` ${parts.join(' ')}`;
+}
+
+/** Segments that are rules for more than `share` of the catalog, with at least three tools. */
+export function sharedRules(guide: ToolGuide, share: number): Set<string> {
+  const counts = new Map<string, number>();
+
+  for (const entry of guide.tools) {
+    for (const rule of entry.rules) counts.set(rule.segment, (counts.get(rule.segment) ?? 0) + 1);
+  }
+
+  const limit = Math.max(2, share * guide.tools.length);
+
+  return new Set([...counts].flatMap(([segment, count]) => (count > limit ? [segment] : [])));
 }
 
 function status(tool: string, history: readonly CallRecord[]): string {
